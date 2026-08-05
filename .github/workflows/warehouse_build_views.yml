@@ -4,6 +4,9 @@ name: warehouse-build-views
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write        # the data dictionary is committed back to the repo
+
 jobs:
   build:
     runs-on: ubuntu-latest

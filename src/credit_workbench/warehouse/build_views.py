@@ -79,15 +79,28 @@ def main() -> None:
         n = con.execute(f"SELECT count(*) FROM raw.{dataset}_sub").fetchone()[0]
         print(f"table raw.{dataset}_sub  {n:,} rows")
 
+    # Standard-taxonomy tags are a small, stable dictionary worth materialising.
+    # Company extension tags are unique per filer and version (tens of millions of
+    # rows), so they stay in the lake behind a view.
     sql(con, """
         CREATE OR REPLACE TABLE ref.xbrl_tag AS
-        SELECT tag, version, any_value(custom) AS custom, any_value(abstract) AS abstract,
+        SELECT tag, version, any_value(abstract) AS abstract,
                any_value(datatype) AS datatype, any_value(iord) AS iord,
                any_value(crdr) AS crdr, any_value(tlabel) AS tlabel, any_value(doc) AS doc
         FROM (SELECT * FROM raw.fsn_tag UNION ALL BY NAME SELECT * FROM raw.fsds_tag)
+        WHERE custom = '0'
         GROUP BY tag, version""")
     print(f"table ref.xbrl_tag  "
-          f"{con.execute('SELECT count(*) FROM ref.xbrl_tag').fetchone()[0]:,} rows")
+          f"{con.execute('SELECT count(*) FROM ref.xbrl_tag').fetchone()[0]:,} rows "
+          f"(standard taxonomy)")
+
+    sql(con, "DROP VIEW IF EXISTS ref.xbrl_tag_custom")
+    sql(con, """
+        CREATE VIEW ref.xbrl_tag_custom AS
+        SELECT * FROM (SELECT * FROM raw.fsn_tag
+                       UNION ALL BY NAME SELECT * FROM raw.fsds_tag)
+        WHERE custom = '1'""")
+    print("view  ref.xbrl_tag_custom")
 
     sql(con, f"""
         CREATE OR REPLACE TABLE ref.dim_company AS
