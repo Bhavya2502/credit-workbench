@@ -1,0 +1,16 @@
+name: probe-sec
+# One-off discovery helper: confirms SEC bulk URL patterns and archive layouts.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.ingest.probe_sec
