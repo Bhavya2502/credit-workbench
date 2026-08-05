@@ -97,7 +97,7 @@ def build(md: duckdb.DuckDBPyConnection) -> None:
         ),
         mapped AS (
             SELECT f.cik, f.company_name, f.sic, f.basis, f.period_end, f.qtrs,
-                   f.fy, f.fp, f.form, f.uom, f.filed, f.adsh,
+                   f.fy, f.fp, f.form, f.uom, f.filed, f.adsh, f.stmt,
                    m.line_no, m.line_code, m.label, m.statement, m.priority,
                    f.tag AS source_tag, f.value
             FROM basis_facts f
@@ -105,9 +105,13 @@ def build(md: duckdb.DuckDBPyConnection) -> None:
             WHERE f.uom IN ('USD', 'USD/shares', 'shares', 'pure')
         ),
         ranked AS (
+            -- A few tags legitimately belong to two lines (depreciation appears on
+            -- both the income statement and the cash flow statement). Prefer the copy
+            -- whose statement matches the line; fall back to the tag priority.
             SELECT *, row_number() OVER (
                        PARTITION BY cik, basis, period_end, qtrs, line_code
-                       ORDER BY priority, filed DESC) AS rn
+                       ORDER BY CASE WHEN stmt = statement THEN 0 ELSE 1 END,
+                                priority, filed DESC) AS rn
             FROM mapped
         )
         SELECT * EXCLUDE (rn) FROM ranked WHERE rn = 1""")
