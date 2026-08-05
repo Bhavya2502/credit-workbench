@@ -29,8 +29,17 @@ import duckdb
 from credit_workbench.common.config import motherduck_token
 from credit_workbench.transform.tag_map import DERIVED, TEMPLATE, rows
 
-FLOW_STATEMENTS = ("IS", "CF", "MEMO")   # duration facts
-STOCK_STATEMENTS = ("BS",)               # instant facts
+def period_filter(flow_qtrs: int) -> str:
+    """Which facts belong in a spread period.
+
+    Income statement and cash flow are duration facts (4 quarters for an annual
+    column, 1 for a quarterly one); the balance sheet is an instant. Memo items are
+    mixed — a pension obligation is an instant, interest paid is a duration — so both
+    shapes are admitted for those.
+    """
+    return (f"(statement IN ('IS', 'CF') AND qtrs = {flow_qtrs})"
+            f" OR (statement = 'BS' AND qtrs = 0)"
+            f" OR (statement = 'MEMO' AND qtrs IN (0, {flow_qtrs}))")
 
 LINE_CODES = [code for _, code, _, _, _ in TEMPLATE]
 STMT_BY_CODE = {code: stmt for _, code, _, stmt, _ in TEMPLATE}
@@ -148,8 +157,7 @@ def build(md: duckdb.DuckDBPyConnection) -> None:
                    basis, period_end, max(fy) AS fy, max(filed) AS last_filed,
                    {pivot_columns()}
             FROM marts.spread_lines
-            WHERE (statement IN {FLOW_STATEMENTS} AND qtrs = 4)
-               OR (statement IN {STOCK_STATEMENTS} AND qtrs = 0)
+            WHERE {period_filter(4)}
             GROUP BY cik, basis, period_end)
         SELECT *, {DERIVED_SQL} FROM base""")
     n_a, n_co = md.execute(
@@ -164,8 +172,7 @@ def build(md: duckdb.DuckDBPyConnection) -> None:
                    basis, period_end, max(fy) AS fy, max(fp) AS fp,
                    {pivot_columns()}
             FROM marts.spread_lines
-            WHERE (statement IN {FLOW_STATEMENTS} AND qtrs = 1)
-               OR (statement IN {STOCK_STATEMENTS} AND qtrs = 0)
+            WHERE {period_filter(1)}
             GROUP BY cik, basis, period_end),
         withttm AS (
             SELECT *,
