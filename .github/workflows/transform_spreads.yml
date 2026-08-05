@@ -1,19 +1,23 @@
 name: transform-spreads
 # Tracker C4 -> C5 -> C6.
 #
-# C4 runs in two stages. Stage 1 de-duplicates, split by *source archive* so each
-# archive is read exactly once. Stage 2 computes reporting vintages, which must see
-# every copy of a figure together and so runs as a single pass over the (much smaller)
-# de-duplicated output.
+# C4 runs in two stages, each batched on the grain that keeps related rows together:
+#   dedup    split by *source archive* (the lake's own partitioning) so each archive
+#            is read exactly once
+#   vintage  split by *period year* — every copy of a figure describes the same
+#            period, so a period partition holds all copies of its figures and none
+#            of anyone else's, which is what makes the pass affordable
+# Getting either grain wrong is not just slow: batching vintages by filing year would
+# split copies of the same figure apart and silently corrupt the first/latest flags.
 on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "all, facts_pit (C4), or spreads (C5+C6)"
+        description: "all | facts_pit (dedup+vintage) | vintage | spreads"
         required: true
         default: all
         type: choice
-        options: [all, facts_pit, spreads]
+        options: [all, facts_pit, vintage, spreads]
       skip_tag_statement:
         description: "Skip rebuilding the tag->statement lookup (already built)"
         type: boolean
@@ -38,7 +42,8 @@ jobs:
 
   dedup:
     if: always() && (inputs.stage == 'all' || inputs.stage == 'facts_pit')
-                 && (needs.tag_statement.result == 'success' || inputs.skip_tag_statement)
+                 && (needs.tag_statement.result == 'success'
+                     || needs.tag_statement.result == 'skipped')
     needs: tag_statement
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -54,22 +59,53 @@ jobs:
       - run: uv sync
       - run: uv run python -m credit_workbench.transform.facts_pit --archives ${{ matrix.archives }}
 
-  vintage:
-    if: always() && (inputs.stage == 'all' || inputs.stage == 'facts_pit')
-                 && needs.dedup.result == 'success'
+  wipe_pit:
+    if: always() && contains(fromJson('["all","facts_pit","vintage"]'), inputs.stage)
+                 && (needs.dedup.result == 'success' || needs.dedup.result == 'skipped')
     needs: dedup
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - run: uv run python -m credit_workbench.transform.vintage
+      - run: uv run python -m credit_workbench.transform.register --action wipe
+
+  vintage:
+    if: always() && contains(fromJson('["all","facts_pit","vintage"]'), inputs.stage)
+                 && needs.wipe_pit.result == 'success'
+    needs: wipe_pit
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        years: ["2005-2010", "2011-2013", "2014-2016", "2017-2019",
+                "2020-2022", "2023-2024", "2025-2028"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.vintage --years ${{ matrix.years }}
+
+  register:
+    if: always() && contains(fromJson('["all","facts_pit","vintage"]'), inputs.stage)
+                 && needs.vintage.result == 'success'
+    needs: vintage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.register --action register
 
   spreads:
     if: always() && (inputs.stage == 'all' || inputs.stage == 'spreads')
-                 && (needs.vintage.result == 'success' || inputs.stage == 'spreads')
-    needs: vintage
+                 && (needs.register.result == 'success'
+                     || needs.register.result == 'skipped')
+    needs: register
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
