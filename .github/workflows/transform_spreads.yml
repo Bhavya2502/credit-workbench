@@ -101,18 +101,46 @@ jobs:
       - run: uv sync
       - run: uv run python -m credit_workbench.transform.register --action register
 
-  spreads:
+  wipe_lines:
     if: always() && (inputs.stage == 'all' || inputs.stage == 'spreads')
                  && (needs.register.result == 'success'
                      || needs.register.result == 'skipped')
     needs: register
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.register --action wipe_lines
+
+  spread_lines:
+    if: always() && needs.wipe_lines.result == 'success'
+    needs: wipe_lines
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        years: ["2005-2010", "2011-2013", "2014-2016", "2017-2019",
+                "2020-2022", "2023-2024", "2025-2028"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.spreads --part lines --years ${{ matrix.years }}
+
+  spread_marts:
+    if: always() && needs.spread_lines.result == 'success'
+    needs: spread_lines
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - name: C5 + C6 - map and spread marts
-        run: uv run python -m credit_workbench.transform.spreads
+      - name: C6 - wide marts, checks, coverage
+        run: uv run python -m credit_workbench.transform.spreads --part marts
       - name: Verify
         run: uv run python -m credit_workbench.transform.verify_spreads

@@ -9,13 +9,14 @@ from credit_workbench.common import r2 as r2util
 from credit_workbench.common.config import R2, motherduck_token
 
 PREFIX = "parquet/derived/facts_pit/"
+LINES_PREFIX = "parquet/derived/spread_lines/"
 OUT = f"r2://credit-workbench-raw/{PREFIX.rstrip('/')}"
 
 
-def wipe() -> None:
-    """Clear the output prefix before a rebuild.
+def wipe(prefix: str = PREFIX) -> None:
+    """Clear an output prefix before a rebuild.
 
-    This dataset is always written whole, and an aborted run can leave files with a
+    These datasets are always written whole, and an aborted run can leave files with a
     different column set under the same partition names — which the view would then
     try to union with the current layout.
     """
@@ -23,11 +24,11 @@ def wipe() -> None:
     s3 = r2util.client(cfg)
     doomed = []
     for page in s3.get_paginator("list_objects_v2").paginate(
-            Bucket=cfg.bucket, Prefix=PREFIX):
+            Bucket=cfg.bucket, Prefix=prefix):
         doomed += [{"Key": o["Key"]} for o in page.get("Contents", [])]
     for i in range(0, len(doomed), 1000):
         s3.delete_objects(Bucket=cfg.bucket, Delete={"Objects": doomed[i:i + 1000]})
-    print(f"Cleared {len(doomed)} object(s) under {PREFIX}")
+    print(f"Cleared {len(doomed)} object(s) under {prefix}")
 
 
 def register() -> None:
@@ -67,9 +68,14 @@ def register() -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--action", choices=["wipe", "register"], required=True)
+    ap.add_argument("--action", choices=["wipe", "wipe_lines", "register"], required=True)
     args = ap.parse_args()
-    wipe() if args.action == "wipe" else register()
+    if args.action == "wipe":
+        wipe()
+    elif args.action == "wipe_lines":
+        wipe(LINES_PREFIX)
+    else:
+        register()
 
 
 if __name__ == "__main__":
