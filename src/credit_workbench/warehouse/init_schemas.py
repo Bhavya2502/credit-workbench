@@ -14,11 +14,13 @@ def run() -> None:
     con = duckdb.connect(f"md:?motherduck_token={motherduck_token()}")
     con.execute("CREATE DATABASE IF NOT EXISTS credit_workbench")
     con.execute("USE credit_workbench")
-    statements = [s.strip() for s in Path("warehouse/schema.sql").read_text().split(";")]
+    sql_text = "\n".join(
+        line for line in Path("warehouse/schema.sql").read_text().splitlines()
+        if not line.lstrip().startswith("--")
+    )
     executed = 0
-    for stmt in statements:
-        if stmt and not all(line.strip().startswith("--") or not line.strip()
-                            for line in stmt.splitlines()):
+    for stmt in (s.strip() for s in sql_text.split(";")):
+        if stmt:
             con.execute(stmt)
             executed += 1
     schemas = [r[0] for r in con.execute(

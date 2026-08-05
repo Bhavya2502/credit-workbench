@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS ref.sic_naics (
 
 -- ---------------------------------------------------------------- raw
 -- Tracker C3: SEC Financial Statement and Notes data sets, loaded verbatim from TSVs.
--- Column set mirrors the SEC file spec; loaded per monthly/quarterly archive.
+-- Column set mirrors the SEC file spec, loaded per monthly/quarterly archive.
 CREATE TABLE IF NOT EXISTS raw.fsn_sub (      -- one row per filing (submission)
     adsh     VARCHAR PRIMARY KEY,             -- accession number
     cik      BIGINT NOT NULL,
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS raw.fsn_tag (      -- tag dictionary
 -- staging.facts_pit  (C4): deduped facts with point-in-time vintage flags (first-reported vs restated)
 -- staging.tag_map    (C5): us-gaap tag -> spread template line mapping, with coverage stats
 -- staging.note_inputs (D1): lease/pension/debt/one-off inputs extracted for adjustments
--- Definitions land here as each transform is built; every column documented in docs/ (A7).
+-- Definitions land here as each transform is built, every column documented in docs/ (A7).
 
 -- ---------------------------------------------------------------- marts (built by transforms)
 -- marts.spreads_a / spreads_q (C6): bank-style spread template, annual + quarterly + TTM
