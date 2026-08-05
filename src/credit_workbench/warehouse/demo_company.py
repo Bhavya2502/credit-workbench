@@ -117,7 +117,8 @@ def main() -> None:
         FROM raw.fsn_num n
         JOIN latest l ON n.adsh = l.adsh AND n.period = l.period
         JOIN raw.fsn_dim d ON d.dimhash = n.dimh AND d.period = n.period
-        WHERE n.tag LIKE 'Revenue%' AND n.uom = 'USD' AND d.segt IS NOT NULL
+        WHERE n.tag LIKE 'Revenue%' AND n.uom = 'USD'
+          AND d.segt IS NOT NULL AND d.segt <> '0'   -- '0' means no dimension
         GROUP BY 1 ORDER BY 2 DESC LIMIT 12""")
 
     section("Footnote narrative available for qualitative review (G corpus)")
