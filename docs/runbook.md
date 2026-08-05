@@ -10,7 +10,20 @@
 | `ingest-entities` | weekly Sun 03:00 UTC | submissions.zip → entity master + filing index | B1 |
 | `ingest-sec-bulk` | weekly Mon 04:00 UTC + manual | Financial Statement (and Notes) archives → R2 parquet | C2, C3 |
 | `warehouse-build-views` | manual, after any ingest | rebuilds MotherDuck views + materialised tables | A1/A6 |
+| `transform-spreads` | manual, after a bulk ingest | point-in-time facts, then map + spread marts | C4, C5, C6 |
+| `demo-company` | manual, takes a ticker | readable extract for one company | — |
+| `explore` | manual, takes a module name | ad-hoc analysis helper | — |
 | `probe-sec` | manual | discovery helper: reports SEC URL patterns and archive layouts | — |
+
+## Extending the spread template
+
+`staging.unmapped_tags` ranks every face-financial tag the template does not yet
+claim, by number of filings and value carried. To capture one, add it to the
+appropriate line's tag list in `src/credit_workbench/transform/tag_map.py` (priority
+order: most specific and most current first) and re-run `transform-spreads` with
+`stage: spreads`. Coverage then moves in `marts.spread_coverage`; nothing else needs
+touching. Never map a tag onto two lines — the resolver takes the first match and the
+duplicate would be silently ignored.
 
 Backfills are year-batched and idempotent: an archive already in R2 is skipped, so an
 interrupted run resumes simply by re-running it. `force: true` reloads anyway.
