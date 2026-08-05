@@ -11,7 +11,9 @@ from credit_workbench.common.config import motherduck_token
 
 
 def run() -> None:
-    con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
+    con = duckdb.connect(f"md:?motherduck_token={motherduck_token()}")
+    con.execute("CREATE DATABASE IF NOT EXISTS credit_workbench")
+    con.execute("USE credit_workbench")
     statements = [s.strip() for s in Path("warehouse/schema.sql").read_text().split(";")]
     executed = 0
     for stmt in statements:
