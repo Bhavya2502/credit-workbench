@@ -84,6 +84,32 @@ QUERIES: list[tuple[str, str]] = [
 ]
 
 
+def storage_report() -> None:
+    """R2 usage by zone — feeds the cost tracker (M4)."""
+    from credit_workbench.common import r2 as r2util
+    from credit_workbench.common.config import R2
+
+    cfg = R2.from_env()
+    s3 = r2util.client(cfg)
+    zones: dict[str, list[int]] = {}
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=cfg.bucket):
+        for obj in page.get("Contents", []):
+            parts = obj["Key"].split("/")
+            zone = "/".join(parts[:4]) if parts[0] == "parquet" else "/".join(parts[:3])
+            entry = zones.setdefault(zone, [0, 0])
+            entry[0] += 1
+            entry[1] += obj["Size"]
+
+    print("\n### R2 storage by zone")
+    total = 0
+    for zone, (n, size) in sorted(zones.items(), key=lambda kv: -kv[1][1]):
+        print(f"  {zone:44} {n:>5} objects {size / 1e9:8.2f} GB")
+        total += size
+    print(f"  {'TOTAL':44} {'':>5}         {total / 1e9:8.2f} GB"
+          f"   (~${max(0, total / 1e9 - 10) * 0.015:.2f}/month beyond the 10 GB free tier)")
+
+
 def main() -> None:
     con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
     for title, query in QUERIES:
@@ -101,6 +127,11 @@ def main() -> None:
                        SELECT TRY_CAST(cik AS BIGINT) FROM raw.fsn_sub)) AS with_xbrl_filings
             FROM ref.dim_company WHERE {predicate}""").fetchone()
         print(f"  {label:20} {row[0]:>6,} companies   {row[1]:>6,} with XBRL filings")
+
+    try:
+        storage_report()
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n(storage report skipped: {exc})")
 
 
 if __name__ == "__main__":
