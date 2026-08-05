@@ -46,7 +46,7 @@ COPY (
                           hive_partitioning = true, union_by_name = true)
     ),
     tagstmt AS (
-        SELECT tag, statement AS stmt FROM read_parquet(
+        SELECT tag, stmt FROM read_parquet(
             '{LAKE}/parquet/derived/tag_statement/data.parquet') WHERE rank = 1
     ),
     facts AS (

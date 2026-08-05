@@ -15,6 +15,24 @@
 | `explore` | manual, takes a module name | ad-hoc analysis helper | — |
 | `probe-sec` | manual | discovery helper: reports SEC URL patterns and archive layouts | — |
 
+## Memory limits on runners
+
+A runner has 16 GB RAM and ~14 GB of disk for spill. The first C4 build was
+OOM-killed after 58 minutes: the step simply stops and the job reports failure with
+no traceback and no step conclusion — that signature means the process was killed,
+not that the SQL was wrong.
+
+The fix was structural, not a bigger memory limit:
+
+- resolve tag → statement once into `ref.tag_statement` (a few thousand rows) instead
+  of joining ~55M presentation rows on every pass;
+- batch by the year each fact *describes*. Never batch C4 by filing year: a 2023
+  figure is re-reported in the 2024 and 2025 filings, and splitting those apart would
+  silently corrupt the `is_first_report` / `is_latest` flags.
+
+Any future heavy transform should follow the same shape — precompute small lookups,
+batch on the natural grain, keep `memory_limit` under 10 GB.
+
 ## Extending the spread template
 
 `staging.unmapped_tags` ranks every face-financial tag the template does not yet
