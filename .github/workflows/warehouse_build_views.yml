@@ -18,6 +18,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
       - run: uv run python -m credit_workbench.warehouse.build_views
+      - name: Verify contents
+        run: uv run python -m credit_workbench.warehouse.verify
       - name: Regenerate data dictionary (A7)
         run: uv run python -m credit_workbench.warehouse.data_dictionary
       - name: Commit dictionary if changed
