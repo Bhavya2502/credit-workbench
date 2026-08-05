@@ -1,0 +1,16 @@
+name: smoke
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install project
+        run: uv sync
+      - name: Environment self-test
+        run: uv run python -m credit_workbench.smoke
