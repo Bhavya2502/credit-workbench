@@ -1,0 +1,19 @@
+name: warehouse-init
+# Tracker item A1. Creates/updates the MotherDuck database schemas from warehouse/schema.sql.
+# Safe to re-run any time (idempotent).
+on:
+  workflow_dispatch:
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install project
+        run: uv sync
+      - name: Create schemas in MotherDuck
+        run: uv run python -m credit_workbench.warehouse.init_schemas

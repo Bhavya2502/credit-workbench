@@ -1,7 +1,10 @@
 name: ingest-companyfacts
-# Tracker item C1. Manual trigger until R2 secrets are configured (tracker A2/A5);
-# switches to nightly cron once the first manual run succeeds.
+# Tracker item C1. Nightly full refresh of SEC companyfacts into the R2 raw zone
+# (02:30 UTC ~ 08:00 IST); delta-optimization via the submissions API comes with
+# the staging build (C4). Manual trigger kept for reruns.
 on:
+  schedule:
+    - cron: "30 2 * * *"
   workflow_dispatch:
 
 jobs:
