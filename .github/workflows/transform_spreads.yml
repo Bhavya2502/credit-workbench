@@ -1,31 +1,73 @@
 name: transform-spreads
-# Tracker C4 -> C5 -> C6. Runs in order; each stage is safe to re-run.
+# Tracker C4 -> C5 -> C6.
+# C4 is split by the year each fact *describes* (never by filing year) so every report
+# of a period lands in one batch and the point-in-time flags see the complete set.
 on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "facts_pit (C4), spreads (C5+C6), or both"
+        description: "all, facts_pit (C4), or spreads (C5+C6)"
         required: true
-        default: both
+        default: all
         type: choice
-        options: [both, facts_pit, spreads]
+        options: [all, facts_pit, spreads]
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
 jobs:
-  transform:
+  tag_statement:
+    if: inputs.stage == 'all' || inputs.stage == 'facts_pit'
     runs-on: ubuntu-latest
-    timeout-minutes: 330
-    env:
-      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - name: C4 - point-in-time fact base
-        if: inputs.stage == 'both' || inputs.stage == 'facts_pit'
-        run: uv run python -m credit_workbench.transform.facts_pit
-      - name: C5 + C6 - map and spreads
-        if: inputs.stage == 'both' || inputs.stage == 'spreads'
+      - run: uv run python -m credit_workbench.transform.tag_statement
+
+  facts_pit:
+    if: inputs.stage == 'all' || inputs.stage == 'facts_pit'
+    needs: tag_statement
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        years: ["2006-2010", "2011-2013", "2014-2016", "2017-2019",
+                "2020-2022", "2023-2024", "2025-2027"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.facts_pit --years ${{ matrix.years }}
+
+  register:
+    if: inputs.stage == 'all' || inputs.stage == 'facts_pit'
+    needs: facts_pit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.register_facts_pit
+
+  spreads:
+    if: always() && (inputs.stage == 'all' || inputs.stage == 'spreads')
+                 && (needs.register.result == 'success' || inputs.stage == 'spreads')
+    needs: register
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: C5 + C6 - map and spread marts
         run: uv run python -m credit_workbench.transform.spreads
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_spreads
