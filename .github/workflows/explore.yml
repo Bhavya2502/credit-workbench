@@ -1,0 +1,25 @@
+name: explore
+# Ad-hoc analysis helper: runs a named module under credit_workbench.warehouse.
+on:
+  workflow_dispatch:
+    inputs:
+      module:
+        description: "Module to run, e.g. explore_facts"
+        required: true
+        default: explore_facts
+        type: string
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.warehouse.${{ inputs.module }}
