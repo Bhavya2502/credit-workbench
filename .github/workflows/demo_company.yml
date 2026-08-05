@@ -1,0 +1,22 @@
+name: demo-company
+# Readable extract of everything the warehouse holds for one company.
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: "Ticker, e.g. PFE"
+        required: true
+        default: PFE
+        type: string
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.warehouse.demo_company --ticker ${{ inputs.ticker }}
