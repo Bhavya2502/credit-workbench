@@ -1,0 +1,31 @@
+name: transform-spreads
+# Tracker C4 -> C5 -> C6. Runs in order; each stage is safe to re-run.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "facts_pit (C4), spreads (C5+C6), or both"
+        required: true
+        default: both
+        type: choice
+        options: [both, facts_pit, spreads]
+
+jobs:
+  transform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: C4 - point-in-time fact base
+        if: inputs.stage == 'both' || inputs.stage == 'facts_pit'
+        run: uv run python -m credit_workbench.transform.facts_pit
+      - name: C5 + C6 - map and spreads
+        if: inputs.stage == 'both' || inputs.stage == 'spreads'
+        run: uv run python -m credit_workbench.transform.spreads
