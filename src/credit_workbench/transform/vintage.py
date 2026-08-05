@@ -31,20 +31,24 @@ def build_sql(years: list[int], tag: str) -> str:
     return f"""
 COPY (
     WITH d AS (
-        SELECT * FROM read_parquet([{globs}], hive_partitioning = true,
-                                   union_by_name = true)
+        -- coreg (co-registrant) is empty for almost every fact. It is part of the
+        -- identity of a figure, but joining on a NULL never matches, so the key is
+        -- built from a coalesced copy and the original column is preserved.
+        SELECT *, coalesce(coreg, '') AS coreg_key
+        FROM read_parquet([{globs}], hive_partitioning = true, union_by_name = true)
+        WHERE period_end IS NOT NULL AND cik IS NOT NULL AND qtrs IS NOT NULL
     ),
     vintage AS (
-        SELECT cik, tag, uom, coreg, period_end, qtrs,
+        SELECT cik, tag, uom, coreg_key, period_end, qtrs,
                min(filed) AS first_filed, max(filed) AS last_filed,
                count(DISTINCT adsh) AS times_reported
         FROM d GROUP BY 1, 2, 3, 4, 5, 6
     )
-    SELECT d.*,
+    SELECT d.* EXCLUDE (coreg_key),
            (d.filed = v.first_filed) AS is_first_report,
            (d.filed = v.last_filed)  AS is_latest,
            v.times_reported
-    FROM d JOIN vintage v USING (cik, tag, uom, coreg, period_end, qtrs)
+    FROM d JOIN vintage v USING (cik, tag, uom, coreg_key, period_end, qtrs)
 ) TO '{OUT}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (period_year),
               OVERWRITE_OR_IGNORE, FILENAME_PATTERN '{tag}_{{i}}')
 """
@@ -75,10 +79,18 @@ def main() -> None:
     except duckdb.IOException as exc:
         if "No files found" not in str(exc):
             raise
-        print("  no data for these years, nothing to do")
+        print("  no input for these years, nothing to do")
         return
-    n = con.execute(
-        f"SELECT count(*) FROM read_parquet('{OUT}/*/{tag}_*.parquet')").fetchone()[0]
+
+    try:
+        n = con.execute(
+            f"SELECT count(*) FROM read_parquet('{OUT}/*/{tag}_*.parquet')").fetchone()[0]
+    except duckdb.IOException:
+        # No output files means the query returned no rows. Say so plainly: a silent
+        # empty result is nearly always a join that dropped everything.
+        raise SystemExit(
+            f"FAILED {years[0]}-{years[-1]}: the transform produced no rows, so no "
+            f"files were written. Check the join keys for nullable columns.")
     print(f"DONE {years[0]}-{years[-1]}: {n:,} facts with vintage flags")
 
 
