@@ -38,7 +38,8 @@ def main() -> None:
             TYPE R2,
             KEY_ID '{cfg.access_key_id}',
             SECRET '{cfg.secret_access_key}',
-            ACCOUNT_ID '{cfg.account_id}'
+            ACCOUNT_ID '{cfg.account_id}',
+            REGION 'auto'
         )"""
     try:
         sql(con, secret_sql)
