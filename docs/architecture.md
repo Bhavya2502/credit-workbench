@@ -28,8 +28,16 @@ flowchart LR
 - **Zones (medallion):** `raw` (as received, verbatim columns) → `staging` (typed, deduped,
   point-in-time vintage flags) → `marts` (spread templates, ratios, benchmarks, events).
   Side schemas: `ref` (master data), `quali` (text corpus indexes), `events` (event feeds).
-- **Storage layout on R2:** `raw/<source>/<dataset>/dt=YYYY-MM-DD/...` for archives;
-  `parquet/<dataset>/...` for columnar rebuilds of the big TSV sets.
+- **Storage layout on R2:** `raw/sec/<dataset>/period=<p>/<original>.zip` keeps the
+  untouched archive for audit; `parquet/sec/<dataset>/<table>/period=<p>/data.parquet`
+  holds the columnar copy the warehouse reads.
+- **Lake-first serving.** Heavy fact tables (`num`, `txt`, `pre`, `cal`, `ren`, `dim`, the
+  filing index) stay as parquet in R2 and are exposed through MotherDuck *views*, so
+  warehouse storage stays inside the free tier and R2 costs pennies per GB. Small,
+  heavily joined tables (filing headers, tag dictionary, entity master) are materialised
+  for speed. `warehouse/build_views.py` owns that split and is safe to re-run.
+- **Raw fidelity:** every bulk column is stored as text exactly as the SEC published it;
+  casting happens in `staging.*_typed` views. Loaders never silently coerce.
 - **Naming:** snake_case everywhere; `_a`/`_q` suffixes for annual/quarterly grains;
   every mart column documented in the data dictionary (tracker A7).
 - **Point-in-time discipline (M3):** keep first-reported and latest-restated values keyed by
