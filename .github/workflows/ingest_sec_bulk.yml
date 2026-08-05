@@ -1,0 +1,62 @@
+name: ingest-sec-bulk
+# Tracker C2 (fsds) and C3 (fsn). Backfills run year-batched in parallel; each archive
+# is skipped if already loaded, so re-runs are cheap and interrupted runs resume.
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "fsds (face financials) or fsn (financials + notes)"
+        required: true
+        type: choice
+        options: [fsds, fsn]
+      years:
+        description: 'Year batches, comma separated (e.g. "2009-2012,2013-2016") or "all"'
+        required: true
+        default: all
+        type: string
+      force:
+        description: "Reload archives already present"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 4 * * 1"   # Mondays 04:00 UTC — picks up newly published archives
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      batches: ${{ steps.split.outputs.batches }}
+    steps:
+      - id: split
+        run: |
+          RAW='${{ inputs.years || 'all' }}'
+          if [ "$RAW" = "all" ]; then
+            echo 'batches=["2009-2011","2012-2014","2015-2017","2018-2020","2021-2022","2023-2024","2025-2026"]' >> "$GITHUB_OUTPUT"
+          else
+            python3 -c "import json,os,sys; print('batches=' + json.dumps([s.strip() for s in sys.argv[1].split(',') if s.strip()]))" "$RAW" >> "$GITHUB_OUTPUT"
+          fi
+
+  load:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    strategy:
+      max-parallel: 4          # stay well inside SEC fair-access limits
+      fail-fast: false
+      matrix:
+        batch: ${{ fromJson(needs.plan.outputs.batches) }}
+    env:
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: Load ${{ inputs.dataset || 'fsn' }} ${{ matrix.batch }}
+        run: >
+          uv run python -m credit_workbench.ingest.sec_bulk
+          --dataset ${{ inputs.dataset || 'fsn' }}
+          --years ${{ matrix.batch }}
+          ${{ inputs.force && '--force' || '' }}

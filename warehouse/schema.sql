@@ -34,49 +34,15 @@ CREATE TABLE IF NOT EXISTS ref.sic_naics (
 );
 
 -- ---------------------------------------------------------------- raw
--- Tracker C3: SEC Financial Statement and Notes data sets, loaded verbatim from TSVs.
--- Column set mirrors the SEC file spec, loaded per monthly/quarterly archive.
-CREATE TABLE IF NOT EXISTS raw.fsn_sub (      -- one row per filing (submission)
-    adsh     VARCHAR PRIMARY KEY,             -- accession number
-    cik      BIGINT NOT NULL,
-    name     VARCHAR,
-    sic      VARCHAR,
-    form     VARCHAR,                         -- 10-K, 10-Q, ...
-    period   DATE,                            -- balance sheet date
-    fy       SMALLINT,
-    fp       VARCHAR,                         -- FY, Q1..Q3
-    filed    DATE,
-    accepted TIMESTAMP,
-    prevrpt  BOOLEAN,                         -- superseded by amendment?
-    detail   BOOLEAN,
-    instance VARCHAR,
-    src_file VARCHAR                          -- which SEC archive this came from
-);
-
-CREATE TABLE IF NOT EXISTS raw.fsn_num (      -- one row per numeric fact (incl. notes detail)
-    adsh     VARCHAR NOT NULL,
-    tag      VARCHAR NOT NULL,                -- us-gaap or extension tag
-    version  VARCHAR NOT NULL,
-    ddate    DATE NOT NULL,                   -- data date
-    qtrs     SMALLINT NOT NULL,               -- 0 = instant, N = duration in quarters
-    uom      VARCHAR NOT NULL,                -- USD, shares, ...
-    dimh     VARCHAR,                         -- dimension hash (segments/axes live here)
-    iprx     SMALLINT,
-    value    DOUBLE,
-    footnote VARCHAR,
-    src_file VARCHAR
-);
-
-CREATE TABLE IF NOT EXISTS raw.fsn_tag (      -- tag dictionary
-    tag      VARCHAR NOT NULL,
-    version  VARCHAR NOT NULL,
-    abstract BOOLEAN,
-    datatype VARCHAR,
-    iord     VARCHAR,
-    crdr     VARCHAR,
-    tlabel   VARCHAR,
-    doc      VARCHAR
-);
+-- SEC bulk datasets are not declared here: the ingest jobs land them in R2 as parquet
+-- and warehouse/build_views.py exposes them, so column sets always track the SEC spec.
+--   raw.fsds_num / _pre / _tag        views over parquet   (C2, face financials)
+--   raw.fsds_sub                      materialised          filing headers
+--   raw.fsn_num / _txt / _dim / _pre / _cal / _ren / _tag   views over parquet (C3)
+--       _txt = full footnote text, _dim = segment/axis dimensions
+--   raw.fsn_sub                       materialised          filing headers incl. public float
+--   ref.filing_index                  view over parquet     every EDGAR filing (feeds H1/H3)
+--   ref.xbrl_tag                      materialised          deduplicated tag dictionary
 
 -- ---------------------------------------------------------------- staging (built by transforms)
 -- staging.facts_pit  (C4): deduped facts with point-in-time vintage flags (first-reported vs restated)
