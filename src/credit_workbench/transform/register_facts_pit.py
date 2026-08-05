@@ -6,13 +6,37 @@ from __future__ import annotations
 
 import duckdb
 
-from credit_workbench.common.config import motherduck_token
+from credit_workbench.common import r2 as r2util
+from credit_workbench.common.config import R2, motherduck_token
 
 LAKE = "r2://credit-workbench-raw"
-OUT = f"{LAKE}/parquet/derived/facts_pit"
+PREFIX = "parquet/derived/facts_pit/"
+OUT = f"{LAKE}/{PREFIX.rstrip('/')}"
+
+
+def clean_stale() -> None:
+    """Remove output from earlier runs that used a different partition column.
+
+    The first build of this dataset partitioned by filing year and was killed
+    part-way; any leftovers would be picked up by the view's glob and collide with
+    the current `period_year=` layout.
+    """
+    cfg = R2.from_env()
+    s3 = r2util.client(cfg)
+    stale = []
+    for page in s3.get_paginator("list_objects_v2").paginate(
+            Bucket=cfg.bucket, Prefix=PREFIX):
+        for obj in page.get("Contents", []):
+            leaf = obj["Key"][len(PREFIX):]
+            if not leaf.startswith("period_year="):
+                stale.append({"Key": obj["Key"]})
+    for i in range(0, len(stale), 1000):
+        s3.delete_objects(Bucket=cfg.bucket, Delete={"Objects": stale[i:i + 1000]})
+    print(f"Removed {len(stale)} stale object(s) from an earlier partition scheme")
 
 
 def main() -> None:
+    clean_stale()
     md = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
     md.execute("DROP VIEW IF EXISTS staging.facts_pit")
     md.execute(f"""
