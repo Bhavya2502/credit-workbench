@@ -1,7 +1,10 @@
 name: transform-spreads
 # Tracker C4 -> C5 -> C6.
-# C4 is split by the year each fact *describes* (never by filing year) so every report
-# of a period lands in one batch and the point-in-time flags see the complete set.
+#
+# C4 runs in two stages. Stage 1 de-duplicates, split by *source archive* so each
+# archive is read exactly once. Stage 2 computes reporting vintages, which must see
+# every copy of a figure together and so runs as a single pass over the (much smaller)
+# de-duplicated output.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +14,10 @@ on:
         default: all
         type: choice
         options: [all, facts_pit, spreads]
+      skip_tag_statement:
+        description: "Skip rebuilding the tag->statement lookup (already built)"
+        type: boolean
+        default: false
 
 env:
   MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
@@ -20,7 +27,7 @@ env:
 
 jobs:
   tag_statement:
-    if: inputs.stage == 'all' || inputs.stage == 'facts_pit'
+    if: (inputs.stage == 'all' || inputs.stage == 'facts_pit') && !inputs.skip_tag_statement
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -29,38 +36,40 @@ jobs:
       - run: uv sync
       - run: uv run python -m credit_workbench.transform.tag_statement
 
-  facts_pit:
-    if: inputs.stage == 'all' || inputs.stage == 'facts_pit'
+  dedup:
+    if: always() && (inputs.stage == 'all' || inputs.stage == 'facts_pit')
+                 && (needs.tag_statement.result == 'success' || inputs.skip_tag_statement)
     needs: tag_statement
     runs-on: ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: 120
     strategy:
       max-parallel: 4
       fail-fast: false
       matrix:
-        years: ["2006-2010", "2011-2013", "2014-2016", "2017-2019",
-                "2020-2022", "2023-2024", "2025-2027"]
+        archives: ["2009-2012", "2013-2015", "2016-2018",
+                   "2019-2021", "2022-2023", "2024-2026"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - run: uv run python -m credit_workbench.transform.facts_pit --years ${{ matrix.years }}
+      - run: uv run python -m credit_workbench.transform.facts_pit --archives ${{ matrix.archives }}
 
-  register:
-    if: inputs.stage == 'all' || inputs.stage == 'facts_pit'
-    needs: facts_pit
+  vintage:
+    if: always() && (inputs.stage == 'all' || inputs.stage == 'facts_pit')
+                 && needs.dedup.result == 'success'
+    needs: dedup
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - run: uv run python -m credit_workbench.transform.register_facts_pit
+      - run: uv run python -m credit_workbench.transform.vintage
 
   spreads:
     if: always() && (inputs.stage == 'all' || inputs.stage == 'spreads')
-                 && (needs.register.result == 'success' || inputs.stage == 'spreads')
-    needs: register
+                 && (needs.vintage.result == 'success' || inputs.stage == 'spreads')
+    needs: vintage
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
