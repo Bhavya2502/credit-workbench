@@ -48,9 +48,16 @@ def main() -> None:
         print(f"Persistent secret unavailable ({exc}); using session secret")
         sql(con, secret_sql.replace("PERSISTENT ", ""))
 
-    # Placeholder tables from the initial schema would block same-named views.
+    # The initial schema created placeholder tables under names now used by views.
+    # Drop whichever kind actually exists so re-runs are safe in either direction.
     for name in ("raw.fsn_sub", "raw.fsn_num", "raw.fsn_tag"):
-        sql(con, f"DROP TABLE IF EXISTS {name}")
+        schema, _, table = name.partition(".")
+        kind = con.execute("""
+            SELECT table_type FROM information_schema.tables
+            WHERE table_catalog = 'credit_workbench'
+              AND table_schema = ? AND table_name = ?""", [schema, table]).fetchone()
+        if kind:
+            sql(con, f"DROP {'VIEW' if kind[0] == 'VIEW' else 'TABLE'} IF EXISTS {name}")
 
     # ---------------------------------------------------------------- views
     for dataset, tables in VIEW_TABLES.items():
