@@ -21,12 +21,18 @@ from __future__ import annotations
 # (line_no, line_code, label, statement, [tags in priority order])
 TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
     # ---------------------------------------------------------------- income statement
+    # `Revenues` leads deliberately. Where a filer tags both, `Revenues` is the
+    # statutory total and the contract-revenue tag is only the part arising from
+    # customer contracts: Pfizer FY2023 reports $58.5bn of Revenues against $50.9bn
+    # of contract revenue, the difference being alliance and royalty income. Filers
+    # whose revenue is entirely from contracts tag only the latter, so it still wins
+    # by fallback.
     (10, "revenue", "Revenue", "IS", [
+        "Revenues",
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "RevenueFromContractWithCustomerIncludingAssessedTax",
-        "Revenues", "SalesRevenueNet", "SalesRevenueGoodsNet",
-        "SalesRevenueServicesNet", "RevenuesNetOfInterestExpense",
-        "RevenueFromContractWithCustomerExcludingAssessedTaxMember"]),
+        "SalesRevenueNet", "SalesRevenueGoodsNet",
+        "SalesRevenueServicesNet", "RevenuesNetOfInterestExpense"]),
     (20, "cost_of_sales", "Cost of sales", "IS", [
         "CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold",
         "CostOfServices", "CostOfSales"]),

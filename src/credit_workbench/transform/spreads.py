@@ -70,7 +70,7 @@ def pivot_columns() -> str:
 # defining input exists. Summing coalesce(x, 0) terms would quietly turn a missing
 # operating income into an "EBITDA" that is really just depreciation — a plausible
 # looking number that is wrong, which is worse than a blank.
-DERIVED_SQL = """
+DERIVED_L1 = """
     CASE WHEN gross_profit IS NOT NULL THEN gross_profit
          WHEN revenue IS NOT NULL AND cost_of_sales IS NOT NULL
          THEN revenue - cost_of_sales END                               AS gross_profit_calc,
@@ -80,9 +80,15 @@ DERIVED_SQL = """
          WHEN revenue IS NOT NULL AND cost_of_sales IS NOT NULL
          THEN revenue - cost_of_sales - coalesce(sgna, 0)
               - coalesce(selling_marketing, 0) - coalesce(general_admin, 0)
-              - coalesce(research_development, 0) END                   AS ebit_calc,
-    CASE WHEN operating_income IS NOT NULL
-         THEN operating_income + coalesce(dep_amort_is, dep_amort_cf, 0) END AS ebitda,
+              - coalesce(research_development, 0) END                   AS ebit_calc
+"""
+
+# EBITDA builds on ebit_calc, so it must sit in a second layer. It falls back to the
+# reconstructed EBIT because many filers (Pfizer among them) present no operating
+# income subtotal at all.
+DERIVED_L2 = """
+    CASE WHEN ebit_calc IS NOT NULL
+         THEN ebit_calc + coalesce(dep_amort_is, dep_amort_cf, 0) END   AS ebitda,
     CASE WHEN coalesce(short_term_debt, current_portion_ltd, long_term_debt) IS NOT NULL
          THEN coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
               + coalesce(long_term_debt, 0) END                         AS total_debt,
@@ -109,6 +115,7 @@ DERIVED_SQL = """
               - coalesce(intangibles, 0) END                            AS tangible_net_worth,
     total_assets - coalesce(total_current_liabilities, 0)               AS capital_employed
 """
+
 
 
 def connect_lake() -> duckdb.DuckDBPyConnection:
@@ -222,7 +229,7 @@ def build_marts() -> None:
                   ON p.cik = l.cik AND p.basis = l.basis AND p.period_end = l.period_end
                 WHERE {period_filter(4)}
                 GROUP BY l.cik, l.basis, l.period_end)
-            SELECT *, {DERIVED_SQL} FROM base
+            SELECT *, {DERIVED_L2} FROM (SELECT *, {DERIVED_L1} FROM base)
         ) TO '{MARTS}/spreads_a.parquet' (FORMAT PARQUET, COMPRESSION ZSTD)""")
 
     print("Building wide quarterly spreads ...")
@@ -260,6 +267,9 @@ def build_marts() -> None:
             SELECT *,
                    CASE WHEN operating_income IS NOT NULL
                         THEN operating_income
+                             + coalesce(dep_amort_is, dep_amort_cf, 0)
+                        WHEN revenue IS NOT NULL AND total_operating_expenses IS NOT NULL
+                        THEN revenue - total_operating_expenses
                              + coalesce(dep_amort_is, dep_amort_cf, 0) END AS ebitda,
                    CASE WHEN coalesce(short_term_debt, current_portion_ltd,
                                       long_term_debt) IS NOT NULL
