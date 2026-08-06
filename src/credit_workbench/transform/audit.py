@@ -71,15 +71,13 @@ CHECKS: list[tuple[str, str]] = [
             SELECT 'total_debt', count(*) FILTER (WHERE total_debt < 0), count(total_debt) FROM pop
         ) ORDER BY pct_negative DESC"""),
 
-    ("4. EBIT exceeding gross profit (suggests an opex subtotal that excludes COGS)", """
-        SELECT count(*) AS company_years,
-               count(DISTINCT cik) AS companies,
-               round(100.0 * count(*) / (SELECT count(*) FROM marts.spreads_a
-                   WHERE basis = 'latest' AND ebit_calc IS NOT NULL
-                     AND gross_profit_calc IS NOT NULL), 1) AS pct_of_comparable
+    ("4. Reconstructed EBIT exceeding gross profit (impossible; tagged EBIT can "
+     "legitimately exceed it via other operating income, so only derived rows count)", """
+        SELECT ebit_source, count(*) AS company_years, count(DISTINCT cik) AS companies
         FROM marts.spreads_a
         WHERE basis = 'latest' AND ebit_calc IS NOT NULL AND gross_profit_calc IS NOT NULL
-          AND ebit_calc > gross_profit_calc * 1.01 AND revenue > 0"""),
+          AND ebit_calc > gross_profit_calc * 1.01 AND revenue > 0
+        GROUP BY 1"""),
 
     ("4b. Worst EBIT-over-gross-profit offenders", """
         SELECT company_name, fy, round(revenue/1e6) AS revenue_mm,
@@ -88,7 +86,7 @@ CHECKS: list[tuple[str, str]] = [
                round(total_operating_expenses/1e6) AS total_opex_mm
         FROM marts.spreads_a
         WHERE basis = 'latest' AND ebit_calc > gross_profit_calc * 1.01
-          AND revenue > 1e9 AND gross_profit_calc > 0
+          AND revenue > 1e9 AND gross_profit_calc > 0 AND ebit_source = 'derived'
         ORDER BY (ebit_calc - gross_profit_calc) DESC LIMIT 8"""),
 
     ("5. Long-term debt double-count risk (LongTermDebt is a TOTAL incl. current)", """
@@ -138,18 +136,17 @@ CHECKS: list[tuple[str, str]] = [
             WHERE basis='latest' AND revenue > 1e6 AND ebitda > revenue * 5"""),
 
     ("10. Cash flow statement ties (CFO + CFI + CFF + FX = net change in cash)", """
-        WITH p AS (
-            SELECT *, coalesce(cfo,0) + coalesce(cfi,0) + coalesce(cff,0)
-                    + coalesce(fx_effect_cash,0) AS computed
-            FROM marts.spreads_a
-            WHERE basis = 'latest' AND fy >= 2015
-              AND cfo IS NOT NULL AND cfi IS NOT NULL AND cff IS NOT NULL
-              AND net_change_cash IS NOT NULL)
         SELECT count(*) AS company_years,
-               round(100.0 * count(*) FILTER (
-                   WHERE abs(computed - net_change_cash)
-                         <= greatest(abs(net_change_cash) * 0.01, 1e5))
-                     / count(*), 1) AS pct_tie"""),
+               round(100.0 * count(*) FILTER (WHERE gap <= tolerance) / count(*), 1)
+                   AS pct_tie
+        FROM (
+            SELECT abs(coalesce(cfo,0) + coalesce(cfi,0) + coalesce(cff,0)
+                       + coalesce(fx_effect_cash,0) - net_change_cash) AS gap,
+                   greatest(abs(net_change_cash) * 0.01, 1e5)          AS tolerance
+            FROM marts.spreads_a
+            WHERE basis = 'latest' AND fy >= 2015 AND cfo IS NOT NULL
+              AND cfi IS NOT NULL AND cff IS NOT NULL
+              AND net_change_cash IS NOT NULL)"""),
 
     ("10b. Duplicate fiscal years after the primary flag", """
         SELECT count(*) AS duplicate_groups_remaining FROM (

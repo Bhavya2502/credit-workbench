@@ -79,13 +79,15 @@ DERIVED_L1 = """
 # EBIT reconstruction hinges on what a filer means by "operating expenses". Some put
 # cost of sales inside that subtotal, others report it separately above — and taking
 # revenue less the subtotal in the second case produces an EBIT larger than gross
-# profit, which is impossible. The magnitude of the subtotal against cost of sales
-# tells the two apart.
+# profit, which is impossible. Comparing the subtotal against cost of sales tells the
+# two apart; where cost of sales is not tagged it is implied from gross profit, since
+# a filer reporting a gross profit subtotal has necessarily deducted its cost of
+# sales already. `ebit_source` records whether the figure was tagged or reconstructed.
 DERIVED_L2 = """
     CASE WHEN operating_income IS NOT NULL THEN operating_income
          WHEN revenue IS NOT NULL AND total_operating_expenses IS NOT NULL
-              AND (cost_of_sales IS NULL
-                   OR total_operating_expenses >= cost_of_sales)
+              AND total_operating_expenses >= coalesce(cost_of_sales,
+                                                       revenue - gross_profit_calc, 0)
          THEN revenue - total_operating_expenses
          WHEN gross_profit_calc IS NOT NULL AND total_operating_expenses IS NOT NULL
          THEN gross_profit_calc - total_operating_expenses
@@ -93,6 +95,8 @@ DERIVED_L2 = """
          THEN gross_profit_calc - coalesce(sgna, 0) - coalesce(selling_marketing, 0)
               - coalesce(general_admin, 0) - coalesce(research_development, 0) END
                                                                         AS ebit_calc,
+    CASE WHEN operating_income IS NOT NULL THEN 'tagged' ELSE 'derived' END
+                                                                        AS ebit_source,
     -- Choose between the two debt shapes rather than adding both: long_term_debt is
     -- the non-current portion (current maturities sit in their own line), while
     -- long_term_debt_total already contains them.
