@@ -9,7 +9,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, note_inputs, segments, events]
+        options: [all, note_inputs, segments, events, segments_register]
 
 env:
   MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
@@ -40,6 +40,7 @@ jobs:
 
   segments:
     if: inputs.parts == 'all' || inputs.parts == 'segments'
+
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
@@ -55,7 +56,9 @@ jobs:
       - run: uv run python -m credit_workbench.transform.segments --archives ${{ matrix.archives }}
 
   segments_register:
-    if: always() && needs.segments.result == 'success'
+    # Also runnable alone, so a transient runner failure here does not cost a rebuild.
+    if: always() && (needs.segments.result == 'success'
+                     || inputs.parts == 'segments_register')
     needs: segments
     runs-on: ubuntu-latest
     timeout-minutes: 60
