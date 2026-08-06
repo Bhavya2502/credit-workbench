@@ -73,36 +73,51 @@ def pivot_columns() -> str:
 DERIVED_L1 = """
     CASE WHEN gross_profit IS NOT NULL THEN gross_profit
          WHEN revenue IS NOT NULL AND cost_of_sales IS NOT NULL
-         THEN revenue - cost_of_sales END                               AS gross_profit_calc,
-    CASE WHEN operating_income IS NOT NULL THEN operating_income
-         WHEN revenue IS NOT NULL AND total_operating_expenses IS NOT NULL
-         THEN revenue - total_operating_expenses
-         WHEN revenue IS NOT NULL AND cost_of_sales IS NOT NULL
-         THEN revenue - cost_of_sales - coalesce(sgna, 0)
-              - coalesce(selling_marketing, 0) - coalesce(general_admin, 0)
-              - coalesce(research_development, 0) END                   AS ebit_calc
+         THEN revenue - cost_of_sales END                               AS gross_profit_calc
 """
 
-# EBITDA builds on ebit_calc, so it must sit in a second layer. It falls back to the
-# reconstructed EBIT because many filers (Pfizer among them) present no operating
-# income subtotal at all.
+# EBIT reconstruction hinges on what a filer means by "operating expenses". Some put
+# cost of sales inside that subtotal, others report it separately above — and taking
+# revenue less the subtotal in the second case produces an EBIT larger than gross
+# profit, which is impossible. The magnitude of the subtotal against cost of sales
+# tells the two apart.
 DERIVED_L2 = """
+    CASE WHEN operating_income IS NOT NULL THEN operating_income
+         WHEN revenue IS NOT NULL AND total_operating_expenses IS NOT NULL
+              AND (cost_of_sales IS NULL
+                   OR total_operating_expenses >= cost_of_sales)
+         THEN revenue - total_operating_expenses
+         WHEN gross_profit_calc IS NOT NULL AND total_operating_expenses IS NOT NULL
+         THEN gross_profit_calc - total_operating_expenses
+         WHEN gross_profit_calc IS NOT NULL
+         THEN gross_profit_calc - coalesce(sgna, 0) - coalesce(selling_marketing, 0)
+              - coalesce(general_admin, 0) - coalesce(research_development, 0) END
+                                                                        AS ebit_calc,
+    -- Choose between the two debt shapes rather than adding both: long_term_debt is
+    -- the non-current portion (current maturities sit in their own line), while
+    -- long_term_debt_total already contains them.
+    CASE WHEN long_term_debt IS NOT NULL OR long_term_debt_total IS NULL
+         THEN coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
+              + coalesce(long_term_debt, 0)
+         ELSE coalesce(short_term_debt, 0) + long_term_debt_total END   AS total_debt_raw,
+    CASE WHEN coalesce(short_term_debt, current_portion_ltd, long_term_debt,
+                       long_term_debt_total) IS NULL THEN FALSE
+         ELSE TRUE END                                                  AS has_debt_data
+"""
+
+DERIVED_L3 = """
     CASE WHEN ebit_calc IS NOT NULL
          THEN ebit_calc + coalesce(dep_amort_is, dep_amort_cf, 0) END   AS ebitda,
-    CASE WHEN coalesce(short_term_debt, current_portion_ltd, long_term_debt) IS NOT NULL
-         THEN coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
-              + coalesce(long_term_debt, 0) END                         AS total_debt,
-    CASE WHEN coalesce(short_term_debt, current_portion_ltd, long_term_debt,
-                       operating_lease_current, operating_lease_noncurrent,
-                       finance_lease_current, finance_lease_noncurrent) IS NOT NULL
-         THEN coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
-              + coalesce(long_term_debt, 0) + coalesce(operating_lease_current, 0)
+    CASE WHEN has_debt_data THEN total_debt_raw END                     AS total_debt,
+    CASE WHEN has_debt_data OR coalesce(operating_lease_current,
+             operating_lease_noncurrent, finance_lease_current,
+             finance_lease_noncurrent) IS NOT NULL
+         THEN coalesce(total_debt_raw, 0) + coalesce(operating_lease_current, 0)
               + coalesce(operating_lease_noncurrent, 0)
               + coalesce(finance_lease_current, 0)
               + coalesce(finance_lease_noncurrent, 0) END               AS total_debt_incl_leases,
-    CASE WHEN coalesce(short_term_debt, current_portion_ltd, long_term_debt) IS NOT NULL
-         THEN coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
-              + coalesce(long_term_debt, 0) - coalesce(cash, 0)
+    CASE WHEN has_debt_data
+         THEN total_debt_raw - coalesce(cash, 0)
               - coalesce(short_term_investments, 0) END                 AS net_debt,
     total_current_assets - total_current_liabilities                    AS working_capital,
     CASE WHEN cfo IS NOT NULL THEN cfo - coalesce(capex, 0) END         AS free_cash_flow,
@@ -113,8 +128,11 @@ DERIVED_L2 = """
     CASE WHEN total_equity IS NOT NULL
          THEN total_equity - coalesce(goodwill, 0)
               - coalesce(intangibles, 0) END                            AS tangible_net_worth,
-    total_assets - coalesce(total_current_liabilities, 0)               AS capital_employed
+    total_assets - coalesce(total_current_liabilities, 0)               AS capital_employed,
+    (revenue IS NULL AND total_assets IS NULL AND net_income IS NULL
+     AND cfo IS NULL)                                                   AS is_empty_spread
 """
+
 
 
 
@@ -229,7 +247,20 @@ def build_marts() -> None:
                   ON p.cik = l.cik AND p.basis = l.basis AND p.period_end = l.period_end
                 WHERE {period_filter(4)}
                 GROUP BY l.cik, l.basis, l.period_end)
-            SELECT *, {DERIVED_L2} FROM (SELECT *, {DERIVED_L1} FROM base)
+            SELECT * EXCLUDE (total_debt_raw, has_debt_data),
+                   -- A company can post two period ends against one fiscal-year label
+                   -- (52/53-week calendars, year-end changes). Both are kept; the more
+                   -- complete and more recent one is flagged so joins on (cik, fy) can
+                   -- pick a single row.
+                   row_number() OVER (
+                       PARTITION BY cik, basis, fy
+                       ORDER BY (CASE WHEN revenue IS NULL THEN 0 ELSE 1 END
+                                 + CASE WHEN total_assets IS NULL THEN 0 ELSE 1 END
+                                 + CASE WHEN cfo IS NULL THEN 0 ELSE 1 END) DESC,
+                                period_end DESC) = 1 AS is_primary_annual
+            FROM (SELECT *, {DERIVED_L3}
+                  FROM (SELECT *, {DERIVED_L2}
+                        FROM (SELECT *, {DERIVED_L1} FROM base)))
         ) TO '{MARTS}/spreads_a.parquet' (FORMAT PARQUET, COMPRESSION ZSTD)""")
 
     print("Building wide quarterly spreads ...")
@@ -269,19 +300,30 @@ def build_marts() -> None:
                         THEN operating_income
                              + coalesce(dep_amort_is, dep_amort_cf, 0)
                         WHEN revenue IS NOT NULL AND total_operating_expenses IS NOT NULL
+                             AND (cost_of_sales IS NULL
+                                  OR total_operating_expenses >= cost_of_sales)
                         THEN revenue - total_operating_expenses
                              + coalesce(dep_amort_is, dep_amort_cf, 0) END AS ebitda,
                    CASE WHEN coalesce(short_term_debt, current_portion_ltd,
-                                      long_term_debt) IS NOT NULL
+                                      long_term_debt, long_term_debt_total) IS NULL
+                        THEN NULL
+                        WHEN long_term_debt IS NOT NULL OR long_term_debt_total IS NULL
                         THEN coalesce(short_term_debt, 0)
                              + coalesce(current_portion_ltd, 0)
-                             + coalesce(long_term_debt, 0) END              AS total_debt,
+                             + coalesce(long_term_debt, 0)
+                        ELSE coalesce(short_term_debt, 0)
+                             + long_term_debt_total END                    AS total_debt,
                    CASE WHEN coalesce(short_term_debt, current_portion_ltd,
-                                      long_term_debt) IS NOT NULL
+                                      long_term_debt, long_term_debt_total) IS NULL
+                        THEN NULL
+                        WHEN long_term_debt IS NOT NULL OR long_term_debt_total IS NULL
                         THEN coalesce(short_term_debt, 0)
                              + coalesce(current_portion_ltd, 0)
                              + coalesce(long_term_debt, 0) - coalesce(cash, 0)
-                             - coalesce(short_term_investments, 0) END      AS net_debt,
+                             - coalesce(short_term_investments, 0)
+                        ELSE coalesce(short_term_debt, 0) + long_term_debt_total
+                             - coalesce(cash, 0)
+                             - coalesce(short_term_investments, 0) END     AS net_debt,
                    CASE WHEN quarters_in_window = 4
                         THEN coalesce(cfo_ttm, 0) - coalesce(capex_ttm, 0) END
                        AS free_cash_flow_ttm

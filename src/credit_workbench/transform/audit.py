@@ -113,10 +113,10 @@ CHECKS: list[tuple[str, str]] = [
             FROM marts.spreads_a
             WHERE basis = 'latest' AND total_current_assets > 0 AND fy >= 2015)
         SELECT count(*) AS company_years,
-               round(100.0 * count(*) FILTER (WHERE parts <= total_current_assets * 1.02), 1)
-                   AS pct_parts_within_total,
-               round(100.0 * count(*) FILTER (WHERE parts > total_current_assets * 1.02), 1)
-                   AS pct_parts_exceed_total
+               round(100.0 * count(*) FILTER (WHERE parts <= total_current_assets * 1.02)
+                     / count(*), 1) AS pct_parts_within_total,
+               round(100.0 * count(*) FILTER (WHERE parts > total_current_assets * 1.02)
+                     / count(*), 1) AS pct_parts_exceed_total
         FROM p"""),
 
     ("8. Duplicate fiscal years (same company + fy, two period ends)", """
@@ -148,7 +148,14 @@ CHECKS: list[tuple[str, str]] = [
         SELECT count(*) AS company_years,
                round(100.0 * count(*) FILTER (
                    WHERE abs(computed - net_change_cash)
-                         <= greatest(abs(net_change_cash) * 0.01, 1e5)), 1) AS pct_tie"""),
+                         <= greatest(abs(net_change_cash) * 0.01, 1e5))
+                     / count(*), 1) AS pct_tie"""),
+
+    ("10b. Duplicate fiscal years after the primary flag", """
+        SELECT count(*) AS duplicate_groups_remaining FROM (
+            SELECT cik, basis, fy FROM marts.spreads_a
+            WHERE basis = 'latest' AND fy IS NOT NULL AND is_primary_annual
+            GROUP BY 1, 2, 3 HAVING count(*) > 1)"""),
 
     ("11. first_reported basis coverage vs latest", """
         SELECT basis, count(*) AS rows, count(DISTINCT cik) AS companies,

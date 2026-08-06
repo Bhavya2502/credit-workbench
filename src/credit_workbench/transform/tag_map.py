@@ -32,7 +32,9 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
         "RevenueFromContractWithCustomerExcludingAssessedTax",
         "RevenueFromContractWithCustomerIncludingAssessedTax",
         "SalesRevenueNet", "SalesRevenueGoodsNet",
-        "SalesRevenueServicesNet", "RevenuesNetOfInterestExpense"]),
+        "SalesRevenueServicesNet", "RevenuesNetOfInterestExpense",
+        # IFRS taxonomy, used by foreign private issuers filing 20-F
+        "Revenue", "RevenueFromContractsWithCustomers"]),
     (20, "cost_of_sales", "Cost of sales", "IS", [
         "CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold",
         "CostOfServices", "CostOfSales"]),
@@ -124,7 +126,7 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
     (400, "cash", "Cash & cash equivalents", "BS", [
         "CashAndCashEquivalentsAtCarryingValue", "Cash",
         "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-        "CashAndDueFromBanks"]),
+        "CashAndDueFromBanks", "CashAndCashEquivalents"]),
     (410, "short_term_investments", "Short-term investments", "BS", [
         "ShortTermInvestments", "MarketableSecuritiesCurrent",
         "AvailableForSaleSecuritiesDebtSecuritiesCurrent",
@@ -175,9 +177,15 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
         "OtherLiabilitiesCurrent"]),
     (620, "total_current_liabilities", "Total current liabilities", "BS", [
         "LiabilitiesCurrent"]),
-    (630, "long_term_debt", "Long-term debt", "BS", [
-        "LongTermDebtNoncurrent", "LongTermDebt",
-        "LongTermDebtAndCapitalLeaseObligations", "LongTermNotesPayable"]),
+    # `LongTermDebtNoncurrent` excludes current maturities; `LongTermDebt` is the
+    # whole facility including them. Mixing the two and then adding the current
+    # portion separately double-counts it, so they occupy different lines and the
+    # debt build-up below chooses between them.
+    (630, "long_term_debt", "Long-term debt (non-current portion)", "BS", [
+        "LongTermDebtNoncurrent", "LongTermDebtAndCapitalLeaseObligations",
+        "LongTermNotesPayable"]),
+    (635, "long_term_debt_total", "Long-term debt (incl. current maturities)", "BS", [
+        "LongTermDebt"]),
     (640, "operating_lease_noncurrent", "Operating lease liability - non-current", "BS", [
         "OperatingLeaseLiabilityNoncurrent"]),
     (650, "finance_lease_noncurrent", "Finance lease liability - non-current", "BS", [
@@ -214,7 +222,8 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
     # ---------------------------------------------------------------- cash flow
     (900, "cfo", "Cash flow from operations", "CF", [
         "NetCashProvidedByUsedInOperatingActivities",
-        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"]),
+        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+        "CashFlowsFromUsedInOperatingActivities"]),
     (910, "dep_amort_cf", "Depreciation & amortisation (cash flow)", "CF", [
         "DepreciationDepletionAndAmortization", "DepreciationAndAmortization",
         "DepreciationAmortizationAndAccretionNet",
@@ -247,7 +256,8 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
         "ProceedsFromDivestitureOfBusinesses"]),
     (1010, "cfi", "Cash flow from investing", "CF", [
         "NetCashProvidedByUsedInInvestingActivities",
-        "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations"]),
+        "NetCashProvidedByUsedInInvestingActivitiesContinuingOperations",
+        "CashFlowsFromUsedInInvestingActivities"]),
     (1020, "debt_issued", "Debt issued", "CF", [
         "ProceedsFromIssuanceOfLongTermDebt", "ProceedsFromNotesPayable",
         "ProceedsFromIssuanceOfSeniorLongTermDebt", "ProceedsFromLinesOfCredit",
@@ -265,7 +275,8 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
         "ProceedsFromIssuanceOrSaleOfEquity"]),
     (1070, "cff", "Cash flow from financing", "CF", [
         "NetCashProvidedByUsedInFinancingActivities",
-        "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations"]),
+        "NetCashProvidedByUsedInFinancingActivitiesContinuingOperations",
+        "CashFlowsFromUsedInFinancingActivities"]),
     (1080, "fx_effect_cash", "FX effect on cash", "CF", [
         "EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
         "EffectOfExchangeRateOnCashAndCashEquivalents"]),
