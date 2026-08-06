@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       module:
-        description: "Module to run, e.g. explore_facts"
+        description: "Module path, e.g. warehouse.explore_facts or transform.audit"
         required: true
-        default: explore_facts
+        default: transform.audit
         type: string
 
 jobs:
@@ -22,4 +22,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - run: uv run python -m credit_workbench.warehouse.${{ inputs.module }}
+      - run: uv run python -m credit_workbench.${{ inputs.module }}
