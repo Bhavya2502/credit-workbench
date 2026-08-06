@@ -14,8 +14,8 @@ from credit_workbench.common.config import motherduck_token
 
 HEADLINE = [
     ("revenue", "Revenue"), ("cost_of_sales", "Cost of sales"),
-    ("gross_profit", "Gross profit"), ("sgna", "SG&A"),
-    ("research_development", "R&D"), ("operating_income", "Operating income (EBIT)"),
+    ("gross_profit_calc", "Gross profit"), ("sgna", "SG&A"),
+    ("research_development", "R&D"), ("ebit_calc", "Operating income (EBIT)"),
     ("ebitda", "EBITDA"), ("interest_expense", "Interest expense"),
     ("pretax_income", "Profit before tax"), ("income_tax", "Income tax"),
     ("net_income", "Net income"),

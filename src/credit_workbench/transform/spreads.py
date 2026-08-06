@@ -66,25 +66,47 @@ def pivot_columns() -> str:
         for code in LINE_CODES)
 
 
+# Derived lines are deliberately NULL-safe: a metric is only produced when its
+# defining input exists. Summing coalesce(x, 0) terms would quietly turn a missing
+# operating income into an "EBITDA" that is really just depreciation — a plausible
+# looking number that is wrong, which is worse than a blank.
 DERIVED_SQL = """
-    coalesce(operating_income, 0)
-        + coalesce(dep_amort_is, dep_amort_cf, 0)                       AS ebitda,
-    coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
-        + coalesce(long_term_debt, 0)                                   AS total_debt,
-    coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
-        + coalesce(long_term_debt, 0) + coalesce(operating_lease_current, 0)
-        + coalesce(operating_lease_noncurrent, 0)
-        + coalesce(finance_lease_current, 0)
-        + coalesce(finance_lease_noncurrent, 0)                         AS total_debt_incl_leases,
-    coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
-        + coalesce(long_term_debt, 0) - coalesce(cash, 0)
-        - coalesce(short_term_investments, 0)                           AS net_debt,
+    CASE WHEN gross_profit IS NOT NULL THEN gross_profit
+         WHEN revenue IS NOT NULL AND cost_of_sales IS NOT NULL
+         THEN revenue - cost_of_sales END                               AS gross_profit_calc,
+    CASE WHEN operating_income IS NOT NULL THEN operating_income
+         WHEN revenue IS NOT NULL AND total_operating_expenses IS NOT NULL
+         THEN revenue - total_operating_expenses
+         WHEN revenue IS NOT NULL AND cost_of_sales IS NOT NULL
+         THEN revenue - cost_of_sales - coalesce(sgna, 0)
+              - coalesce(selling_marketing, 0) - coalesce(general_admin, 0)
+              - coalesce(research_development, 0) END                   AS ebit_calc,
+    CASE WHEN operating_income IS NOT NULL
+         THEN operating_income + coalesce(dep_amort_is, dep_amort_cf, 0) END AS ebitda,
+    CASE WHEN coalesce(short_term_debt, current_portion_ltd, long_term_debt) IS NOT NULL
+         THEN coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
+              + coalesce(long_term_debt, 0) END                         AS total_debt,
+    CASE WHEN coalesce(short_term_debt, current_portion_ltd, long_term_debt,
+                       operating_lease_current, operating_lease_noncurrent,
+                       finance_lease_current, finance_lease_noncurrent) IS NOT NULL
+         THEN coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
+              + coalesce(long_term_debt, 0) + coalesce(operating_lease_current, 0)
+              + coalesce(operating_lease_noncurrent, 0)
+              + coalesce(finance_lease_current, 0)
+              + coalesce(finance_lease_noncurrent, 0) END               AS total_debt_incl_leases,
+    CASE WHEN coalesce(short_term_debt, current_portion_ltd, long_term_debt) IS NOT NULL
+         THEN coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
+              + coalesce(long_term_debt, 0) - coalesce(cash, 0)
+              - coalesce(short_term_investments, 0) END                 AS net_debt,
     total_current_assets - total_current_liabilities                    AS working_capital,
-    coalesce(cfo, 0) - coalesce(capex, 0)                               AS free_cash_flow,
-    coalesce(net_income, 0) + coalesce(dep_amort_cf, dep_amort_is, 0)
-        + coalesce(deferred_tax_cf, 0) + coalesce(share_based_comp_cf, 0)
-                                                                        AS ffo_simplified,
-    total_equity - coalesce(goodwill, 0) - coalesce(intangibles, 0)     AS tangible_net_worth,
+    CASE WHEN cfo IS NOT NULL THEN cfo - coalesce(capex, 0) END         AS free_cash_flow,
+    CASE WHEN net_income IS NOT NULL
+         THEN net_income + coalesce(dep_amort_cf, dep_amort_is, 0)
+              + coalesce(deferred_tax_cf, 0)
+              + coalesce(share_based_comp_cf, 0) END                    AS ffo_simplified,
+    CASE WHEN total_equity IS NOT NULL
+         THEN total_equity - coalesce(goodwill, 0)
+              - coalesce(intangibles, 0) END                            AS tangible_net_worth,
     total_assets - coalesce(total_current_liabilities, 0)               AS capital_employed
 """
 
@@ -175,30 +197,55 @@ def build_marts() -> None:
     print("Building wide annual spreads ...")
     con.execute(f"""
         COPY (
-            WITH base AS (
-                SELECT cik, any_value(company_name) AS company_name,
-                       any_value(sic) AS sic, basis, period_end,
-                       max(fy) AS fy, max(filed) AS last_filed,
+            WITH lines AS (
+                SELECT * FROM read_parquet('{LINES}/*/*.parquet',
+                                           hive_partitioning = true,
+                                           union_by_name = true)),
+            -- An annual column exists only where the company actually reported a
+            -- full-year flow. Balance sheets are tagged at every quarter end, so
+            -- keying on period alone would invent an "annual" row for each quarter
+            -- with no income statement attached.
+            annual_periods AS (
+                SELECT DISTINCT cik, basis, period_end FROM lines
+                WHERE statement IN ('IS', 'CF') AND qtrs = 4),
+            base AS (
+                SELECT l.cik, any_value(l.company_name) AS company_name,
+                       any_value(l.sic) AS sic, l.basis, l.period_end,
+                       -- Label the year from the period itself. The filing's own fy
+                       -- refers to the year of the report, so a 2024 column read from
+                       -- a 2026 annual report would be labelled 2026.
+                       CASE WHEN month(l.period_end) <= 5 THEN year(l.period_end) - 1
+                            ELSE year(l.period_end) END AS fy,
+                       max(l.filed) AS last_filed,
                        {pivot_columns()}
-                FROM read_parquet('{LINES}/*/*.parquet', hive_partitioning = true,
-                                  union_by_name = true)
+                FROM lines l JOIN annual_periods p
+                  ON p.cik = l.cik AND p.basis = l.basis AND p.period_end = l.period_end
                 WHERE {period_filter(4)}
-                GROUP BY cik, basis, period_end)
+                GROUP BY l.cik, l.basis, l.period_end)
             SELECT *, {DERIVED_SQL} FROM base
         ) TO '{MARTS}/spreads_a.parquet' (FORMAT PARQUET, COMPRESSION ZSTD)""")
 
     print("Building wide quarterly spreads ...")
     con.execute(f"""
         COPY (
-            WITH q AS (
-                SELECT cik, any_value(company_name) AS company_name,
-                       any_value(sic) AS sic, basis, period_end,
-                       max(fy) AS fy, max(fp) AS fp,
+            WITH lines AS (
+                SELECT * FROM read_parquet('{LINES}/*/*.parquet',
+                                           hive_partitioning = true,
+                                           union_by_name = true)),
+            quarter_periods AS (
+                SELECT DISTINCT cik, basis, period_end FROM lines
+                WHERE statement IN ('IS', 'CF') AND qtrs = 1),
+            q AS (
+                SELECT l.cik, any_value(l.company_name) AS company_name,
+                       any_value(l.sic) AS sic, l.basis, l.period_end,
+                       CASE WHEN month(l.period_end) <= 5 THEN year(l.period_end) - 1
+                            ELSE year(l.period_end) END AS fy,
+                       max(l.fp) AS fp,
                        {pivot_columns()}
-                FROM read_parquet('{LINES}/*/*.parquet', hive_partitioning = true,
-                                  union_by_name = true)
+                FROM lines l JOIN quarter_periods p
+                  ON p.cik = l.cik AND p.basis = l.basis AND p.period_end = l.period_end
                 WHERE {period_filter(1)}
-                GROUP BY cik, basis, period_end),
+                GROUP BY l.cik, l.basis, l.period_end),
             withttm AS (
                 SELECT *,
                        sum(revenue) OVER w4          AS revenue_ttm,
@@ -211,13 +258,20 @@ def build_marts() -> None:
                 WINDOW w4 AS (PARTITION BY cik, basis ORDER BY period_end
                               ROWS BETWEEN 3 PRECEDING AND CURRENT ROW))
             SELECT *,
-                   coalesce(operating_income, 0)
-                       + coalesce(dep_amort_is, dep_amort_cf, 0) AS ebitda,
-                   coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
-                       + coalesce(long_term_debt, 0)             AS total_debt,
-                   coalesce(short_term_debt, 0) + coalesce(current_portion_ltd, 0)
-                       + coalesce(long_term_debt, 0) - coalesce(cash, 0)
-                       - coalesce(short_term_investments, 0)     AS net_debt,
+                   CASE WHEN operating_income IS NOT NULL
+                        THEN operating_income
+                             + coalesce(dep_amort_is, dep_amort_cf, 0) END AS ebitda,
+                   CASE WHEN coalesce(short_term_debt, current_portion_ltd,
+                                      long_term_debt) IS NOT NULL
+                        THEN coalesce(short_term_debt, 0)
+                             + coalesce(current_portion_ltd, 0)
+                             + coalesce(long_term_debt, 0) END              AS total_debt,
+                   CASE WHEN coalesce(short_term_debt, current_portion_ltd,
+                                      long_term_debt) IS NOT NULL
+                        THEN coalesce(short_term_debt, 0)
+                             + coalesce(current_portion_ltd, 0)
+                             + coalesce(long_term_debt, 0) - coalesce(cash, 0)
+                             - coalesce(short_term_investments, 0) END      AS net_debt,
                    CASE WHEN quarters_in_window = 4
                         THEN coalesce(cfo_ttm, 0) - coalesce(capex_ttm, 0) END
                        AS free_cash_flow_ttm
