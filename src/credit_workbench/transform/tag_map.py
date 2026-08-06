@@ -49,8 +49,14 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
         "ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost"]),
     (80, "labor_expense", "Labor & related expense", "IS", ["LaborAndRelatedExpense"]),
     (90, "professional_fees", "Professional fees", "IS", ["ProfessionalFees"]),
+    # `DepreciationAmortizationAndAccretionNet` matters more than its name suggests:
+    # Walmart moved to it in 2019 and without it their EBITDA collapses to EBIT,
+    # understating it by about $13bn a year. Broad measures lead; `Depreciation`
+    # alone trails because it excludes amortisation.
     (100, "dep_amort_is", "Depreciation & amortisation (income statement)", "IS", [
         "DepreciationAndAmortization", "DepreciationDepletionAndAmortization",
+        "DepreciationAmortizationAndAccretionNet",
+        "DepreciationDepletionAndAmortizationIncludingDiscontinuedOperations",
         "Depreciation", "AmortizationOfIntangibleAssets"]),
     (110, "impairment", "Impairment charges", "IS", [
         "GoodwillImpairmentLoss", "AssetImpairmentCharges",
@@ -211,6 +217,8 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
         "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"]),
     (910, "dep_amort_cf", "Depreciation & amortisation (cash flow)", "CF", [
         "DepreciationDepletionAndAmortization", "DepreciationAndAmortization",
+        "DepreciationAmortizationAndAccretionNet",
+        "DepreciationDepletionAndAmortizationIncludingDiscontinuedOperations",
         "Depreciation"]),
     (920, "share_based_comp_cf", "Share-based compensation (cash flow)", "CF", [
         "ShareBasedCompensation"]),
