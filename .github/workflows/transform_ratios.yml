@@ -1,0 +1,28 @@
+name: transform-ratios
+# Tracker E1 (ratio library) and E2 (peer benchmarks).
+on:
+  workflow_dispatch:
+    inputs:
+      ticker:
+        description: "Ticker for the worked peer comparison in the verification"
+        default: PFE
+        type: string
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+jobs:
+  ratios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: E1 + E2 - ratios and benchmarks
+        run: uv run python -m credit_workbench.transform.ratios
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_ratios --ticker ${{ inputs.ticker || 'PFE' }}
