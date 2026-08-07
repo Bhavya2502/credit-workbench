@@ -18,7 +18,10 @@ CHECKS: list[tuple[str, str]] = [
                round(100.0 * count(*) FILTER (WHERE distress_24m) / count(*), 2) AS pct_distress_24m,
                round(100.0 * count(*) FILTER (WHERE default_12m)  / count(*), 2) AS pct_default_12m,
                round(100.0 * count(*) FILTER (WHERE default_24m)  / count(*), 2) AS pct_default_24m,
-               round(100.0 * count(*) FILTER (WHERE bankruptcy_24m) / count(*), 2) AS pct_bankruptcy_24m
+               round(100.0 * count(*) FILTER (WHERE bankruptcy_24m) / count(*), 2) AS pct_bankruptcy_24m,
+               round(100.0 * count(*) FILTER (WHERE delisting_24m) / count(*), 2) AS pct_delisting_24m,
+               round(100.0 * count(*) FILTER (WHERE adverse_delisting_24m) / count(*), 2)
+                   AS pct_adverse_delisting_24m
         FROM marts.credit_outcomes"""),
 
     ("Event mix — what actually happens first", """

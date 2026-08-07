@@ -15,8 +15,15 @@ would credit the model with foresight it never had. This is the same discipline 
 first-reported basis in the spreads: the model must only ever see what was knowable.
 
   default   bankruptcy, debt acceleration or a non-reliance declaration (severity 5)
-  distress  the above plus impairments, auditor changes, delisting notices and
-            late-filing notifications (severity 4+)
+  distress  the above plus impairments, auditor changes and late-filing notifications
+
+Delisting is deliberately *excluded* from distress. A company acquired at a premium
+files the same delisting notice as one thrown off the exchange for non-compliance, and
+the two are opposite credit outcomes. Including them together produced a target that
+barely separated by leverage (23.9% to 28.7% across quintiles) while default separated
+cleanly (3.5% to 8.8%) — the signature of a contaminated label. Delistings are kept as
+their own column, and `adverse_delisting_24m` isolates those with no acquisition or
+change-of-control filing nearby.
 """
 from __future__ import annotations
 
@@ -45,10 +52,20 @@ def main() -> None:
             SELECT cik, filing_date, category, severity, item_code, description
             FROM events.corp_events
             WHERE severity >= 4 AND filing_date IS NOT NULL),
+        -- completion of an acquisition or a change of control: the benign
+        -- explanation for a delisting
+        ma AS (
+            SELECT cik, filing_date FROM events.corp_events
+            WHERE item_code IN ('2.01', '5.01') AND filing_date IS NOT NULL),
         joined AS (
             SELECT o.*, e.filing_date AS event_date, e.category, e.severity,
                    e.item_code, e.description,
-                   date_diff('day', o.observation_date, e.filing_date) AS days_after
+                   date_diff('day', o.observation_date, e.filing_date) AS days_after,
+                   EXISTS (SELECT 1 FROM ma
+                           WHERE ma.cik = o.cik
+                             AND ma.filing_date BETWEEN e.filing_date - INTERVAL 180 DAY
+                                                    AND e.filing_date + INTERVAL 90 DAY)
+                       AS near_ma_event
             FROM obs o
             LEFT JOIN ev e
               ON e.cik = o.cik
@@ -62,9 +79,11 @@ def main() -> None:
                arg_min(category, days_after)                            AS first_event_category,
                arg_min(description, days_after)                         AS first_event,
                max(severity)                                            AS worst_severity_24m,
-               -- distress: any severity 4+ event
-               coalesce(bool_or(days_after <= 365), FALSE)              AS distress_12m,
-               coalesce(bool_or(days_after <= 730), FALSE)              AS distress_24m,
+               -- distress excludes delisting: see the module docstring
+               coalesce(bool_or(days_after <= 365 AND category <> 'listing'), FALSE)
+                                                                        AS distress_12m,
+               coalesce(bool_or(days_after <= 730 AND category <> 'listing'), FALSE)
+                                                                        AS distress_24m,
                -- default: severity 5 only (bankruptcy, debt acceleration, non-reliance)
                coalesce(bool_or(severity = 5 AND days_after <= 365), FALSE) AS default_12m,
                coalesce(bool_or(severity = 5 AND days_after <= 730), FALSE) AS default_24m,
@@ -77,7 +96,9 @@ def main() -> None:
                coalesce(bool_or(category = 'late_filing' AND days_after <= 730), FALSE)
                                                                         AS late_filing_24m,
                coalesce(bool_or(category = 'listing' AND days_after <= 730), FALSE)
-                                                                        AS delisting_24m
+                                                                        AS delisting_24m,
+               coalesce(bool_or(category = 'listing' AND days_after <= 730
+                                AND NOT near_ma_event), FALSE)          AS adverse_delisting_24m
         FROM joined
         GROUP BY cik, fy, period_end, observation_date""")
     rows, companies = md.execute(
@@ -91,7 +112,8 @@ def main() -> None:
         SELECT o.cik, o.company_name, o.sic, o.sic2, o.fy, o.period_end,
                o.observation_date,
                o.distress_12m, o.distress_24m, o.default_12m, o.default_24m,
-               o.bankruptcy_24m, o.days_to_first_event, o.first_event_category,
+               o.bankruptcy_24m, o.delisting_24m, o.adverse_delisting_24m,
+               o.days_to_first_event, o.first_event_category,
                r.* EXCLUDE (cik, company_name, sic, sic2, fy, period_end, basis)
         FROM marts.credit_outcomes o
         JOIN marts.ratios r
