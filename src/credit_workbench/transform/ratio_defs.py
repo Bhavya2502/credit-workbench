@@ -23,8 +23,12 @@ RATIOS: list[tuple[str, str, str]] = [
      "CASE WHEN ebitda > 0 THEN total_debt_incl_leases / ebitda END"),
     ("net_debt_to_ebitda", "leverage",
      "CASE WHEN ebitda > 0 THEN net_debt / ebitda END"),
+    # Capital must be positive for this to mean anything. With negative equity the
+    # denominator shrinks or flips sign and the ratio reads as low leverage — the
+    # opposite of the truth. Those companies surface through equity_negative instead.
     ("debt_to_capital", "leverage",
-     "total_debt / nullif(total_debt + total_equity, 0)"),
+     "CASE WHEN total_debt + total_equity > 0 "
+     "THEN total_debt / (total_debt + total_equity) END"),
     ("debt_to_assets", "leverage", "total_debt / nullif(total_assets, 0)"),
     ("liabilities_to_assets", "leverage",
      "total_liabilities / nullif(total_assets, 0)"),

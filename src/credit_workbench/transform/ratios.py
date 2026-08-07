@@ -99,7 +99,28 @@ def main() -> None:
     print("Building peer benchmarks ...")
     md.execute(f"""
         CREATE OR REPLACE TABLE marts.benchmarks AS
-        SELECT level, industry_code, industry_name, fy, size_band, ratio,
+        WITH v AS (
+            SELECT r.sic, r.sic2, r.fy, r.size_band, r.ratio, r.value,
+                   c.sic_description
+            FROM marts.ratio_values r LEFT JOIN ref.dim_company c USING (cik)
+            WHERE r.basis = 'latest'),
+        grains AS (
+            -- three grains: 2-digit industry, 4-digit industry, and 2-digit crossed
+            -- with size, because a $50m borrower is not peer to a $50bn one
+            SELECT 'sic2' AS level, sic2 AS industry_code, fy, 'ALL' AS size_band,
+                   ratio, value, sic_description
+            FROM v WHERE sic2 IS NOT NULL
+            UNION ALL
+            SELECT 'sic4', sic, fy, 'ALL', ratio, value, sic_description
+            FROM v WHERE sic IS NOT NULL
+            UNION ALL
+            SELECT 'sic2_size', sic2, fy, size_band, ratio, value, sic_description
+            FROM v WHERE sic2 IS NOT NULL)
+        SELECT level, industry_code, fy, size_band, ratio,
+               -- the label must not be part of the grouping key: a 2-digit industry
+               -- spans many 4-digit descriptions, and grouping by it would split one
+               -- industry into a dozen tiny peer groups
+               mode(sic_description)                      AS industry_name,
                count(*)                                   AS n_companies,
                quantile_cont(value, 0.10)                 AS p10,
                quantile_cont(value, 0.25)                 AS p25,
@@ -107,28 +128,8 @@ def main() -> None:
                quantile_cont(value, 0.75)                 AS p75,
                quantile_cont(value, 0.90)                 AS p90,
                avg(value)                                 AS mean
-        FROM (
-            -- three grains: 2-digit industry, 4-digit industry, and 2-digit crossed
-            -- with size, because a $50m borrower is not peer to a $50bn one
-            SELECT 'sic2' AS level, r.sic2 AS industry_code,
-                   any_value(c.sic_description) AS industry_name,
-                   r.fy, 'ALL' AS size_band, r.ratio, r.value, r.cik
-            FROM marts.ratio_values r LEFT JOIN ref.dim_company c USING (cik)
-            WHERE r.basis = 'latest' AND r.sic2 IS NOT NULL
-            GROUP BY 1, 2, 4, 5, 6, 7, 8
-            UNION ALL
-            SELECT 'sic4', r.sic, any_value(c.sic_description), r.fy, 'ALL',
-                   r.ratio, r.value, r.cik
-            FROM marts.ratio_values r LEFT JOIN ref.dim_company c USING (cik)
-            WHERE r.basis = 'latest' AND r.sic IS NOT NULL
-            GROUP BY 1, 2, 4, 5, 6, 7, 8
-            UNION ALL
-            SELECT 'sic2_size', r.sic2, any_value(c.sic_description), r.fy,
-                   r.size_band, r.ratio, r.value, r.cik
-            FROM marts.ratio_values r LEFT JOIN ref.dim_company c USING (cik)
-            WHERE r.basis = 'latest' AND r.sic2 IS NOT NULL
-            GROUP BY 1, 2, 4, 5, 6, 7, 8)
-        GROUP BY level, industry_code, industry_name, fy, size_band, ratio
+        FROM grains
+        GROUP BY level, industry_code, fy, size_band, ratio
         HAVING count(*) >= {MIN_PEERS}""")
     print(f"table marts.benchmarks  "
           f"{md.execute('SELECT count(*) FROM marts.benchmarks').fetchone()[0]:,} rows")
