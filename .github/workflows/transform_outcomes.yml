@@ -1,0 +1,20 @@
+name: transform-outcomes
+# Credit outcomes as a model target (foundation for L2), plus the model dataset.
+on:
+  workflow_dispatch:
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+
+jobs:
+  outcomes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: Build credit outcomes and model dataset
+        run: uv run python -m credit_workbench.transform.outcomes
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_outcomes
