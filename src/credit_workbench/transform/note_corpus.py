@@ -59,52 +59,69 @@ NOTE_TYPE_SQL = """
 # Phrases are chosen to be specific: "covenant" alone appears in every debt note ever
 # written, so it is paired with words that indicate the covenant was actually breached.
 SIGNALS: list[tuple[str, str, str]] = [
+    # Every pattern must survive negation. The accounting standards *require* firms to
+    # state whether a condition exists, so the words appear either way: "we evaluated
+    # whether there is substantial doubt ... and concluded there is no substantial
+    # doubt" matches a naive search perfectly. A first pass without these guards fired
+    # going concern on 21.5% of all filings and gave material weakness an inverse
+    # relationship with default — the signature of catching the denial, not the event.
     ("going_concern",
-     "txt LIKE '%substantial doubt%' AND txt LIKE '%going concern%'",
+     "regexp_matches(txt, '(raise|raises|raised|indicate|indicates|there is|existence of)"
+     "[^.]{0,80}substantial doubt') "
+     "AND NOT regexp_matches(txt, '(no|not|without|never)[^.]{0,30}substantial doubt')",
      "Auditor or management doubts the company can continue operating"),
     ("material_weakness",
-     "txt LIKE '%material weakness%'",
+     "regexp_matches(txt, 'material weakness(es)?[^.]{0,60}"
+     "(exist|identified|in internal control|in our internal control)') "
+     "AND NOT regexp_matches(txt, '(no|not|did not identify|without)[^.]{0,40}"
+     "material weakness')",
      "Internal controls over financial reporting are deficient"),
     ("restatement",
-     "(txt LIKE '%restatement%' OR txt LIKE '%restated%') "
-     "AND (txt LIKE '%previously issued%' OR txt LIKE '%non-reliance%')",
+     "regexp_matches(txt, 'restate(ment|d|ments)?[^.]{0,120}previously issued') "
+     "OR txt LIKE '%non-reliance%'",
      "Previously published figures were wrong"),
     ("covenant_breach",
-     "txt LIKE '%covenant%' AND (txt LIKE '%violation%' OR txt LIKE '%breach%' "
-     "OR txt LIKE '%not in compliance%' OR txt LIKE '%failed to comply%')",
+     "regexp_matches(txt, 'covenant[^.]{0,150}"
+     "(violat|breach|not in compliance|failed to comply|non-compliance)') "
+     "OR regexp_matches(txt, '(violat|breach|not in compliance|failed to comply)"
+     "[^.]{0,150}covenant') ",
      "A borrowing covenant was breached"),
     ("covenant_waiver",
-     "txt LIKE '%covenant%' AND (txt LIKE '%waiver%' OR txt LIKE '%waived%' "
-     "OR txt LIKE '%amend%')",
-     "Lenders waived or renegotiated a covenant - often precedes trouble"),
+     "regexp_matches(txt, 'covenant[^.]{0,150}(waiver|waived)') "
+     "OR regexp_matches(txt, 'waiv(er|ed)[^.]{0,150}covenant')",
+     "Lenders waived a covenant - often the earliest formal sign of strain"),
     ("event_of_default",
-     "txt LIKE '%event of default%' OR txt LIKE '%in default under%'",
-     "Default provisions discussed as live rather than hypothetical"),
+     "regexp_matches(txt, 'event of default[^.]{0,60}(has |had )?(occurred|existed)') "
+     "OR regexp_matches(txt, '(is|was|are|were|remain)[^.]{0,20}in default under')",
+     "A default is described as having happened, not as a hypothetical term"),
     ("cross_default",
      "txt LIKE '%cross-default%' OR txt LIKE '%cross default%'",
      "One default can trigger others across the debt structure"),
     ("liquidity_warning",
-     "txt LIKE '%sufficient liquidity%' OR txt LIKE '%additional financing%' "
-     "OR txt LIKE '%may not be able to continue%' OR txt LIKE '%need to raise%'",
-     "Management flags a funding need"),
+     "regexp_matches(txt, '(may not|might not|will not|unable to|insufficient)"
+     "[^.]{0,100}(liquidity|sufficient cash|meet its obligations|fund its operations)') "
+     "OR regexp_matches(txt, 'need[^.]{0,40}additional (financing|capital|funding)')",
+     "Management flags a funding shortfall"),
     ("debt_acceleration",
-     "txt LIKE '%accelerat%' AND txt LIKE '%indebtedness%'",
-     "Debt could be or has been called early"),
-    ("impairment_discussion",
-     "txt LIKE '%impairment charge%' OR txt LIKE '%goodwill impairment%'",
-     "Assets written down"),
+     "regexp_matches(txt, 'accelerat[^.]{0,100}(indebtedness|outstanding borrowings|"
+     "notes|loans)[^.]{0,60}(has|have|was|were|became) ')",
+     "Debt has been called early"),
+    ("impairment_recorded",
+     "regexp_matches(txt, '(recorded|recognized|incurred)[^.]{0,80}impairment (charge|loss)')",
+     "Assets actually written down, not merely discussed"),
     ("class_action",
      "txt LIKE '%class action%'",
      "Material litigation exposure"),
     ("regulatory_investigation",
-     "txt LIKE '%subpoena%' OR txt LIKE '%sec investigation%' "
-     "OR txt LIKE '%department of justice%'",
+     "txt LIKE '%subpoena%' OR regexp_matches(txt, '(sec|securities and exchange "
+     "commission|department of justice)[^.]{0,60}(investigation|inquiry|enforcement)')",
      "Regulatory or criminal exposure"),
     ("refinancing",
-     "txt LIKE '%refinanc%'",
-     "Debt structure being reworked"),
+     "regexp_matches(txt, 'refinanc[^.]{0,80}(completed|entered|closed|consummated)')",
+     "Debt structure reworked"),
     ("dividend_restriction",
-     "txt LIKE '%restrict%' AND txt LIKE '%dividend%'",
+     "regexp_matches(txt, '(restrict|prohibit|limit)[^.]{0,100}"
+     "(dividend|distribution)[^.]{0,60}(under|pursuant to|by the terms)')",
      "Lenders limit distributions - a sign of tight terms"),
 ]
 
