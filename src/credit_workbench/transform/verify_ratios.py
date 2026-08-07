@@ -115,17 +115,23 @@ def main() -> None:
     cik, name, industry = row
     fy = con.execute(f"""
         SELECT max(fy) FROM marts.ratio_percentiles WHERE cik = {cik}""").fetchone()[0]
-    print(f"\n### Peer comparison: {name} — {industry}, FY{fy}")
+    band = con.execute(f"""
+        SELECT any_value(size_band) FROM marts.ratio_percentiles
+        WHERE cik = {cik} AND fy = {fy}""").fetchone()[0]
+    print(f"\n### Peer comparison: {name} — {industry}, FY{fy}, size band {band}")
+    print("    Peers are matched on industry AND size. The whole-industry group mixes")
+    print("    large issuers with pre-revenue companies and is not comparable.")
     tear = ", ".join(f"'{r}'" for r in TEARSHEET)
     show(con, f"""
         SELECT p.ratio, round(p.value, 2) AS company,
                round(b.p25, 2) AS peer_p25, round(b.p50, 2) AS peer_median,
                round(b.p75, 2) AS peer_p75, b.n_companies AS peers,
-               round(p.credit_percentile * 100) AS credit_pctile
+               round(p.credit_percentile_size * 100) AS pctile_size_peers,
+               round(p.credit_percentile * 100)      AS pctile_all_industry
         FROM marts.ratio_percentiles p
         LEFT JOIN marts.benchmarks b
-          ON b.level = 'sic2' AND b.industry_code = p.sic2 AND b.fy = p.fy
-         AND b.ratio = p.ratio AND b.size_band = 'ALL'
+          ON b.level = 'sic2_size' AND b.industry_code = p.sic2 AND b.fy = p.fy
+         AND b.ratio = p.ratio AND b.size_band = p.size_band
         WHERE p.cik = {cik} AND p.fy = {fy} AND p.ratio IN ({tear})
         ORDER BY p.ratio""")
 
