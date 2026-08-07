@@ -138,16 +138,29 @@ def main() -> None:
     md.execute(f"""
         CREATE OR REPLACE TABLE marts.ratio_percentiles AS
         SELECT cik, company_name, sic, sic2, fy, period_end, size_band, ratio, value,
-               peer_count,
-               percentile_in_industry,
+               peer_count, peer_count_size,
+               percentile_in_industry, percentile_in_size_peers,
                -- orient every ratio the same way: 0 is the weakest credit in the peer
                -- group, 1 the strongest, whichever direction the raw ratio runs
                CASE WHEN ratio IN ({higher_worse}) THEN 1 - percentile_in_industry
-                    ELSE percentile_in_industry END AS credit_percentile
+                    ELSE percentile_in_industry END      AS credit_percentile,
+               -- Prefer this one for analysis. An industry alone is not a peer group:
+               -- "Pharmaceutical Preparations" holds both Pfizer and hundreds of
+               -- pre-revenue biotechs, whose median EBITDA margin is about -43%.
+               -- Ranking a large profitable issuer against them flatters it for
+               -- reasons that have nothing to do with its credit.
+               CASE WHEN peer_count_size < {MIN_PEERS} THEN NULL
+                    WHEN ratio IN ({higher_worse}) THEN 1 - percentile_in_size_peers
+                    ELSE percentile_in_size_peers END    AS credit_percentile_size
         FROM (
-            SELECT r.*, count(*) OVER (PARTITION BY r.sic2, r.fy, r.ratio) AS peer_count,
+            SELECT r.*,
+                   count(*) OVER (PARTITION BY r.sic2, r.fy, r.ratio) AS peer_count,
+                   count(*) OVER (PARTITION BY r.sic2, r.fy, r.size_band, r.ratio)
+                       AS peer_count_size,
                    percent_rank() OVER (PARTITION BY r.sic2, r.fy, r.ratio
-                                        ORDER BY r.value) AS percentile_in_industry
+                                        ORDER BY r.value) AS percentile_in_industry,
+                   percent_rank() OVER (PARTITION BY r.sic2, r.fy, r.size_band, r.ratio
+                                        ORDER BY r.value) AS percentile_in_size_peers
             FROM marts.ratio_values r
             WHERE r.basis = 'latest' AND r.sic2 IS NOT NULL)
         WHERE peer_count >= {MIN_PEERS}""")
