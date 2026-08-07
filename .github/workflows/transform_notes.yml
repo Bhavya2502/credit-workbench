@@ -1,0 +1,49 @@
+name: transform-notes
+# Tracker G — qualitative corpus and credit signals from tagged note text.
+on:
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: "all | signals | register"
+        required: true
+        default: all
+        type: choice
+        options: [all, signals, register]
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+
+jobs:
+  signals:
+    if: inputs.parts == 'all' || inputs.parts == 'signals'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      max-parallel: 3
+      fail-fast: false
+      matrix:
+        archives: ["2009-2012", "2013-2015", "2016-2018",
+                   "2019-2021", "2022-2023", "2024-2026"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.note_corpus --archives ${{ matrix.archives }}
+
+  register:
+    if: always() && (needs.signals.result == 'success' || inputs.parts == 'register')
+    needs: signals
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - name: Register corpus and signals
+        run: uv run python -m credit_workbench.transform.note_corpus --register
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_notes
