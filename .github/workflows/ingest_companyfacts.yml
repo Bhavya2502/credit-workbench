@@ -2,9 +2,11 @@ name: ingest-companyfacts
 # Tracker item C1. Nightly full refresh of SEC companyfacts into the R2 raw zone
 # (02:30 UTC ~ 08:00 IST); delta-optimization via the submissions API comes with
 # the staging build (C4). Manual trigger kept for reruns.
+# Nightly refresh is OFF. This file has no downstream consumer: every mart is built
+# from the Financial Statement and Notes archives instead, so refreshing it nightly
+# spent about 150 runner minutes a month producing data nothing reads. Re-enable the
+# schedule when the incremental pipeline that needs its freshness actually exists.
 on:
-  schedule:
-    - cron: "30 2 * * *"
   workflow_dispatch:
 
 jobs:
