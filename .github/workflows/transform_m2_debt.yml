@@ -1,0 +1,65 @@
+name: transform-m2-debt
+# M2 calculation-linkbase validation, and instrument-level debt extraction.
+on:
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: "all | calc | debt | register"
+        required: true
+        default: all
+        type: choice
+        options: [all, calc, debt, register]
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+jobs:
+  calc:
+    if: inputs.parts == 'all' || inputs.parts == 'calc'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      max-parallel: 3
+      fail-fast: false
+      matrix:
+        archives: ["2009-2012", "2013-2015", "2016-2018",
+                   "2019-2021", "2022-2023", "2024-2026"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.calc_check --archives ${{ matrix.archives }}
+
+  debt:
+    if: inputs.parts == 'all' || inputs.parts == 'debt'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      max-parallel: 3
+      fail-fast: false
+      matrix:
+        archives: ["2009-2012", "2013-2015", "2016-2018",
+                   "2019-2021", "2022-2023", "2024-2026"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.debt_instruments --archives ${{ matrix.archives }}
+
+  register:
+    if: always() && ((needs.calc.result == 'success' && needs.debt.result == 'success')
+                     || inputs.parts == 'register')
+    needs: [calc, debt]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.calc_check --register
+      - run: uv run python -m credit_workbench.transform.debt_instruments --register
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_m2_debt
