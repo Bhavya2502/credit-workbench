@@ -67,10 +67,16 @@ def build(lo: int, hi: int) -> None:
             WHERE TRY_CAST(substr(period, 1, 4) AS INTEGER) BETWEEN {lo} AND {hi}
               AND ptag IS NOT NULL AND ctag IS NOT NULL),
         facts AS (
+            -- Restrict the fact side to the periods these archives can describe.
+            -- Without this every batch scans all 150m facts regardless of its year
+            -- range, which is what exhausted memory on the two largest batches.
+            -- The window reaches back three years because an annual report carries
+            -- comparatives, and forward one for early-filed periods.
             SELECT cik, company_name, adsh, tag, period_end, qtrs, uom, value, fy,
-                   year(period_end) AS period_year
+                   period_year
             FROM read_parquet('{PIT}/*/*.parquet', hive_partitioning = true)
-            WHERE is_latest AND uom = 'USD' AND value IS NOT NULL)
+            WHERE is_latest AND uom = 'USD' AND value IS NOT NULL
+              AND period_year BETWEEN {lo} - 3 AND {hi} + 1)
     """
 
     print(f"Checking filer arithmetic, archives {lo}-{hi} ...")
