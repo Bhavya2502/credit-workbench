@@ -8,7 +8,7 @@ on:
         required: true
         default: all
         type: choice
-        options: [all, calc, debt, register]
+        options: [all, calc, calc_rerun, debt, register]
 
 env:
   MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
@@ -19,6 +19,7 @@ env:
 jobs:
   calc:
     if: inputs.parts == 'all' || inputs.parts == 'calc'
+
     runs-on: ubuntu-latest
     timeout-minutes: 240
     strategy:
@@ -27,6 +28,22 @@ jobs:
       matrix:
         archives: ["2009-2012", "2013-2015", "2016-2018",
                    "2019-2021", "2022-2023", "2024-2026"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.calc_check --archives ${{ matrix.archives }}
+
+  calc_rerun:
+    # Re-runs only the batches that were OOM-killed before the fact scan was bounded.
+    if: inputs.parts == 'calc_rerun'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      max-parallel: 2
+      fail-fast: false
+      matrix:
+        archives: ["2019-2021", "2022-2023", "2024-2026"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -52,7 +69,7 @@ jobs:
   register:
     if: always() && ((needs.calc.result == 'success' && needs.debt.result == 'success')
                      || inputs.parts == 'register')
-    needs: [calc, debt]
+    needs: [calc, debt, calc_rerun]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
