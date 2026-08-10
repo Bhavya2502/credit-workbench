@@ -70,13 +70,16 @@ Q: list[tuple[str, str]] = [
         UNION ALL SELECT 'marts.debt_instruments', count(*) FROM marts.debt_instruments
         UNION ALL SELECT 'marts.adjustment_inputs', count(*) FROM marts.adjustment_inputs
         UNION ALL SELECT 'marts.spread_lines', count(*) FROM marts.spread_lines
-        UNION ALL SELECT 'marts.ratios', count(*) FROM marts.ratios
+        UNION ALL SELECT 'marts.ratio_values', count(*) FROM marts.ratio_values
+        UNION ALL SELECT 'marts.concentration', count(*) FROM marts.concentration
+        UNION ALL SELECT 'marts.credit_events', count(*) FROM marts.credit_events
+        UNION ALL SELECT 'quali.note_text', count(*) FROM quali.note_text
         ORDER BY rows DESC"""),
 
     ("6. Notes as text — the narrative half", """
-        SELECT count(*) AS text_blocks, count(DISTINCT adsh) AS filings,
-               count(DISTINCT note_type) AS note_types
-        FROM quali.note_corpus"""),
+        SELECT (SELECT count(*) FROM quali.note_text)              AS text_blocks,
+               (SELECT count(DISTINCT adsh) FROM quali.note_signals) AS filings_scanned,
+               (SELECT count(*) FROM ref.signal_definitions)       AS signals_defined"""),
 
     ("7. The frontier — biggest tags not yet modelled anywhere", """
         SELECT tag, coalesce(label, '(company extension)') AS label,
