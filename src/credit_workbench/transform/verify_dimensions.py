@@ -111,16 +111,41 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.adjustment_inputs WHERE basis = 'latest'""",
      "intangible > 5000 and fin_lease > 2000 and ppe > 10000"),
 
-    ("intangible amortisation ladder does not exceed gross intangibles",
+    # An identity, not an approximation: all amortisation still to come is exactly the
+    # unamortised cost sitting on the balance sheet. Gross less accumulated is what
+    # must remain to be charged, so the whole ladder has to reach it.
+    ("intangible ladder equals net carrying value of finite-lived intangibles",
      """SELECT count(*) AS compared,
-               count(*) FILTER (WHERE ladder > intangible_gross * 1.02) AS exceeds
+               round(100.0 * count(*) FILTER (
+                   WHERE abs(ladder - net_carrying) <= 0.05 * net_carrying) / count(*), 1)
+                   AS pct_tie
         FROM (SELECT coalesce(intangible_amort_y1, 0) + coalesce(intangible_amort_y2, 0)
                      + coalesce(intangible_amort_y3, 0) + coalesce(intangible_amort_y4, 0)
-                     + coalesce(intangible_amort_y5, 0) AS ladder, intangible_gross
+                     + coalesce(intangible_amort_y5, 0)
+                     + coalesce(intangible_amort_thereafter, 0) AS ladder,
+                     intangible_gross - intangible_accumulated_amortisation AS net_carrying
               FROM marts.adjustment_inputs
               WHERE basis = 'latest' AND intangible_gross > 0
-                AND intangible_amort_y1 IS NOT NULL)""",
-     "compared > 1000 and exceeds < compared * 0.05"),
+                AND intangible_accumulated_amortisation IS NOT NULL
+                AND intangible_amort_y1 IS NOT NULL
+                AND intangible_amort_thereafter IS NOT NULL)""",
+     "compared > 1000 and pct_tie > 55"),
+
+    ("operating-lease ladder ties to its total (the rung gaps are closed)",
+     """SELECT count(*) AS compared,
+               round(100.0 * count(*) FILTER (
+                   WHERE abs(ladder - op_lease_undiscounted_total)
+                         <= 0.02 * op_lease_undiscounted_total) / count(*), 1) AS pct_tie
+        FROM (SELECT coalesce(op_lease_due_y1, 0) + coalesce(op_lease_due_y2, 0)
+                     + coalesce(op_lease_due_y3, 0) + coalesce(op_lease_due_y4, 0)
+                     + coalesce(op_lease_due_y5, 0)
+                     + coalesce(op_lease_due_thereafter, 0) AS ladder,
+                     op_lease_undiscounted_total
+              FROM marts.adjustment_inputs
+              WHERE basis = 'latest' AND op_lease_undiscounted_total > 0
+                AND op_lease_due_y1 IS NOT NULL)""",
+     # Was 49.5% before the AfterYearFour and rolling rungs were added.
+     "compared > 50000 and pct_tie > 70"),
 
     ("finance lease ladder sums to the undiscounted total filers report",
      """SELECT count(*) AS compared,
