@@ -46,20 +46,29 @@ CHECKS: list[tuple[str, str, str]] = [
                count(DISTINCT member) AS entities FROM marts.dim_legal_entity""",
      "facts > 1e6 and companies > 2000 and entities > 5000"),
 
+    ("entity roles cover the structural-subordination cases",
+     """SELECT count(*) FILTER (WHERE entity_role = 'parent_only')  AS parent_only,
+               count(*) FILTER (WHERE entity_role = 'guarantor')    AS guarantor,
+               count(*) FILTER (WHERE entity_role = 'non_guarantor') AS non_guarantor,
+               count(*) FILTER (WHERE entity_role = 'named_entity') AS named
+        FROM marts.legal_entity_detail""",
+     "parent_only > 50000 and guarantor > 10000 and named > 100000"),
+
     ("fair-value view resolves to the three hierarchy levels",
-     """SELECT count(*) FILTER (WHERE member ILIKE '%Level1%') AS l1,
-               count(*) FILTER (WHERE member ILIKE '%Level2%') AS l2,
-               count(*) FILTER (WHERE member ILIKE '%Level3%') AS l3
-        FROM marts.dim_fair_value_hierarchy""",
-     "l1 > 100000 and l2 > 100000 and l3 > 100000"),
+     """SELECT count(*) FILTER (WHERE hierarchy_level = 'Level 1') AS l1,
+               count(*) FILTER (WHERE hierarchy_level = 'Level 2') AS l2,
+               count(*) FILTER (WHERE hierarchy_level = 'Level 3') AS l3,
+               count(*) FILTER (WHERE hierarchy_level = 'Combined or other') AS other
+        FROM marts.fair_value_hierarchy""",
+     "l1 > 100000 and l2 > 100000 and l3 > 100000 and other < l1 * 0.2"),
 
     ("fair-value levels sum to the reported total, where a filer gives both",
      """WITH lv AS (
             SELECT cik, period_end, tag,
-                   sum(value) FILTER (WHERE member ILIKE '%Level1%'
-                                        OR member ILIKE '%Level2%'
-                                        OR member ILIKE '%Level3%') AS levels_sum
-            FROM marts.dim_fair_value_hierarchy
+                   sum(value) FILTER (
+                       WHERE hierarchy_level IN ('Level 1', 'Level 2', 'Level 3'))
+                       AS levels_sum
+            FROM marts.fair_value_hierarchy
             WHERE uom = 'USD' AND qtrs = 0 GROUP BY 1, 2, 3),
         tot AS (
             SELECT cik, period_end, tag, value AS total

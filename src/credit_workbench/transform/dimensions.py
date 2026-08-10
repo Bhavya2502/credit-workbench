@@ -168,6 +168,47 @@ def register() -> None:
             WHERE d.axis = '{axis}'""")
     print(f"      {len(NAMED_AXES)} named axis views created")
 
+    # The two axes asked for by name get a classified column on top of the raw member,
+    # because the member string alone is not what an analyst wants to group by.
+    #
+    # Fair value: match the three levels exactly. Members like
+    # `FairValueInputsLevel1AndLevel2` and `FairValueInputsLevel12And3` exist and a
+    # LIKE '%Level1%' test would count them into more than one level, so a combined
+    # member is labelled as such and kept out of any level total.
+    md.execute("DROP VIEW IF EXISTS marts.fair_value_hierarchy")
+    md.execute("""
+        CREATE VIEW marts.fair_value_hierarchy AS
+        SELECT *, CASE member
+                      WHEN 'FairValueInputsLevel1' THEN 'Level 1'
+                      WHEN 'FairValueInputsLevel2' THEN 'Level 2'
+                      WHEN 'FairValueInputsLevel3' THEN 'Level 3'
+                      WHEN 'FairValueMeasuredAtNetAssetValuePerShare' THEN 'NAV practical expedient'
+                      WHEN 'EstimateOfFairValueFairValueDisclosure' THEN 'Total fair value'
+                      WHEN 'CarryingReportedAmountFairValueDisclosure' THEN 'Carrying amount'
+                      ELSE 'Combined or other' END AS hierarchy_level
+        FROM marts.dim_fair_value_hierarchy""")
+
+    # Legal entity: the credit question is which entity the lender's claim sits at.
+    # `ParentCompany` is the SEC Schedule I parent-only presentation; guarantor and
+    # non-guarantor members are the Rule 3-10 disclosure. Those three, contrasted with
+    # the consolidated figure, are what structural subordination is read from.
+    md.execute("DROP VIEW IF EXISTS marts.legal_entity_detail")
+    md.execute("""
+        CREATE VIEW marts.legal_entity_detail AS
+        SELECT *,
+               CASE WHEN member = 'ParentCompany' THEN 'parent_only'
+                    WHEN member ILIKE 'NonGuarantor%' THEN 'non_guarantor'
+                    WHEN member ILIKE '%NonGuarantor%' THEN 'non_guarantor'
+                    WHEN member ILIKE '%Guarantor%' THEN 'guarantor'
+                    WHEN member ILIKE 'VariableInterestEntity%' THEN 'vie'
+                    WHEN member IN ('Subsidiaries', 'SubsidiaryIssuer', 'ConsolidatedFunds',
+                                    'AllOtherSubsidiaries') THEN 'subsidiaries_aggregate'
+                    WHEN member ILIKE '%Eliminat%' THEN 'eliminations'
+                    ELSE 'named_entity' END AS entity_role
+        FROM marts.dim_legal_entity""")
+    print("view  marts.fair_value_hierarchy  (level-classified)")
+    print("view  marts.legal_entity_detail   (entity role classified)")
+
     md.execute("DROP TABLE IF EXISTS ref.dimension_catalog")
     md.execute("""
         CREATE TABLE ref.dimension_catalog AS
