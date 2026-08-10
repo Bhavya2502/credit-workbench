@@ -288,9 +288,12 @@ def register() -> None:
                    any_value(stmt) AS statement
             FROM staging.facts_pit WHERE is_latest GROUP BY 1),
         dimensioned AS (
+            -- is_latest on both sides, so the two fact counts mean the same thing.
+            -- Without it the schedule side counts every re-report of a figure and
+            -- would look several times busier than the consolidated side.
             SELECT tag, count(*) AS facts, count(DISTINCT adsh) AS filings,
                    count(DISTINCT cik) AS companies, max(fy) AS last_fy
-            FROM marts.facts_dimensioned GROUP BY 1),
+            FROM marts.facts_dimensioned WHERE is_latest GROUP BY 1),
         tags AS (SELECT tag FROM consolidated UNION SELECT tag FROM dimensioned),
         labels AS (
             SELECT tag, any_value(tlabel) AS label, any_value(doc) AS documentation,
