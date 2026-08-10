@@ -294,7 +294,11 @@ def register() -> None:
             SELECT tag, count(*) AS facts, count(DISTINCT adsh) AS filings,
                    count(DISTINCT cik) AS companies, max(fy) AS last_fy
             FROM marts.facts_dimensioned WHERE is_latest GROUP BY 1),
-        tags AS (SELECT tag FROM consolidated UNION SELECT tag FROM dimensioned),
+        -- The universe is every tag that ever carried a fact, superseded vintages
+        -- included: a tag a filer used once and then abandoned still needs a catalog
+        -- entry. Only the counts above are held to one vintage.
+        tags AS (SELECT DISTINCT tag FROM staging.facts_pit
+                 UNION SELECT DISTINCT tag FROM marts.facts_dimensioned),
         labels AS (
             SELECT tag, any_value(tlabel) AS label, any_value(doc) AS documentation,
                    any_value(datatype) AS datatype, any_value(crdr) AS debit_credit
