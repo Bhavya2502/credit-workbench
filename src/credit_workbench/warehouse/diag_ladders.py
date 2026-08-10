@@ -58,6 +58,17 @@ Q: list[tuple[str, str]] = [
         WHERE is_latest AND period_year >= 2020 AND fy IS NOT NULL
           AND tag LIKE 'FiniteLivedIntangibleAssetsAmortizationExpense%'
         GROUP BY 1 ORDER BY 1"""),
+
+    # The op-lease ladder ties only half the time, so the rung vocabulary is wider than
+    # what D1 maps. List the rungs filers actually use, most-used first.
+    ("5. The real rung vocabulary of each ladder", " UNION ALL ".join(f"""
+        (SELECT '{name}' AS ladder, tag, count(DISTINCT adsh) AS filings,
+                (m.tag IS NOT NULL) AS mapped_in_d1
+         FROM staging.facts_pit f
+         LEFT JOIN (SELECT DISTINCT source_tag AS tag FROM staging.note_inputs) m USING (tag)
+         WHERE f.is_latest AND f.tag LIKE '{pat}' AND f.period_year >= 2021
+         GROUP BY tag, m.tag
+         ORDER BY filings DESC LIMIT 14)""" for name, pat in LADDERS.items())),
 ]
 
 
