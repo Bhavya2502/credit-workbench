@@ -161,7 +161,11 @@ def register() -> None:
         md.execute(f"""
             CREATE VIEW marts.dim_{view} AS
             SELECT f.cik, f.company_name, f.sic, f.form, f.fy, f.period_end, f.qtrs,
-                   f.tag, f.uom, f.value, d.member, d.full_dimension, f.adsh
+                   f.tag, f.uom, f.value, d.member, d.full_dimension,
+                   -- 1 means this axis is the only one on the fact. Anything higher and
+                   -- the figure is a cell of a cross-tabulation, so summing over one
+                   -- axis alone double counts across the others.
+                   f.dimension_count, f.adsh
             FROM marts.facts_dimensioned f
             JOIN ref.dimension_index d
               ON d.dimhash = f.dimh AND d.period = f.period
