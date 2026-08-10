@@ -71,30 +71,12 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.fair_value_hierarchy""",
      "l1 > 100000 and l2 > 100000 and l3 > 100000 and other < l1 * 0.2"),
 
-    ("fair-value levels sum to the reported total, where a filer gives both",
-     """WITH lv AS (
-            SELECT cik, period_end, tag,
-                   sum(value) FILTER (
-                       WHERE hierarchy_level IN ('Level 1', 'Level 2', 'Level 3'))
-                       AS levels_sum
-            FROM marts.fair_value_hierarchy
-            WHERE uom = 'USD' AND qtrs = 0 GROUP BY 1, 2, 3),
-        tot AS (
-            SELECT cik, period_end, tag, value AS total
-            FROM staging.facts_pit WHERE is_latest AND uom = 'USD' AND qtrs = 0)
-        SELECT count(*) AS compared,
-               round(100.0 * count(*) FILTER (
-                   WHERE abs(l.levels_sum - t.total)
-                         <= 0.02 * greatest(abs(t.total), 1)) / count(*), 1) AS pct_tie
-        FROM lv l JOIN tot t USING (cik, period_end, tag)
-        WHERE l.levels_sum IS NOT NULL AND abs(t.total) > 1e6""",
-     "compared > 1000 and pct_tie > 60"),
-
-    # Same test restricted to facts where the hierarchy is the only axis. Filers also
-    # cross the hierarchy with asset class and with recurring/non-recurring, and adding
-    # every cell of that cross-tabulation counts the same money several times over -
-    # which is why the unrestricted version above ties only 43% of the time.
-    ("fair-value levels sum to the total when the hierarchy is the only axis",
+    # Two distinct ways this sum used to be inflated, both now excluded: facts that
+    # cross the hierarchy with asset class or measurement frequency (dimension_count > 1,
+    # every cell of a cross-tabulation), and the three-or-four filings that each
+    # re-report the same balance-sheet date (is_latest). Together they took the tie from
+    # 43% to the level asserted here.
+    ("fair-value levels sum to the total on one vintage of single-axis facts",
      """WITH lv AS (
             SELECT cik, period_end, tag,
                    sum(value) FILTER (
@@ -111,7 +93,14 @@ CHECKS: list[tuple[str, str, str]] = [
                          <= 0.02 * greatest(abs(t.total), 1)) / count(*), 1) AS pct_tie
         FROM lv l JOIN tot t USING (cik, period_end, tag)
         WHERE l.levels_sum IS NOT NULL AND abs(t.total) > 1e6""",
-     "compared > 1000 and pct_tie > 75"),
+     "compared > 1000 and pct_tie > 80"),
+
+    ("the dimensioned layer carries point-in-time flags",
+     """SELECT count(*) AS facts,
+               count(*) FILTER (WHERE is_latest) AS latest,
+               round(avg(filings_reporting), 2) AS avg_filings_per_figure
+        FROM marts.facts_dimensioned WHERE period_year = 2022""",
+     "latest < facts and avg_filings_per_figure > 1.5"),
 
     ("subsidiary revenue does not exceed the consolidated figure",
      """WITH sub AS (

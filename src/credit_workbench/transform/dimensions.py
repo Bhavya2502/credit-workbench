@@ -34,6 +34,7 @@ from credit_workbench.common.config import R2, motherduck_token
 LAKE = "r2://credit-workbench-raw"
 DIM_INDEX = f"{LAKE}/parquet/derived/dimension_index"
 FACTS_DIM = f"{LAKE}/parquet/derived/facts_dimensioned"
+FACTS_PIT = f"{LAKE}/parquet/derived/facts_dimensioned_pit"
 
 # Axes that earn a named view. The generic mart still carries every other axis.
 NAMED_AXES: dict[str, tuple[str, str]] = {
@@ -138,6 +139,45 @@ def build(lo: int, hi: int) -> None:
             print(f"DONE {label} {lo}-{hi}: no rows")
 
 
+def flag(lo: int, hi: int) -> None:
+    """Mark which filing a dimensioned fact should be read from.
+
+    A balance-sheet date is re-reported by the 10-K and by the comparatives in the
+    10-Qs that follow, so the lake holds roughly four copies of every figure. Summing
+    without choosing one gives a total about four times too large - measured at a median
+    ratio of exactly 4.0 against filers' own fair-value totals, which is what exposed
+    this. `staging.facts_pit` has carried these flags on the consolidated side all
+    along; the schedules need them for the same reason.
+
+    Batched by period year rather than by archive: every copy of a figure shares its
+    period end, so a period-year partition holds the whole set to rank. The first pass
+    already wrote the data partitioned that way, so this reads it back partition by
+    partition instead of rescanning the source archives.
+    """
+    con = connect()
+    globs = ", ".join(f"'{FACTS_DIM}/period_year={y}/*.parquet'"
+                      for y in range(lo, hi + 1))
+    tag = f"p{lo}_{hi}"
+    print(f"Flagging point-in-time vintage for period years {lo}-{hi} ...")
+    con.execute(f"""
+        COPY (
+            SELECT *,
+                   filed = max(filed) OVER w AS is_latest,
+                   filed = min(filed) OVER w AS is_first_report,
+                   count(*) OVER w           AS filings_reporting
+            FROM read_parquet([{globs}], hive_partitioning = true, union_by_name = true)
+            WINDOW w AS (PARTITION BY cik, period_end, qtrs, tag, dimh,
+                                      coalesce(coreg, ''), uom)
+        ) TO '{FACTS_PIT}' (FORMAT PARQUET, COMPRESSION ZSTD,
+                            PARTITION_BY (period_year), OVERWRITE_OR_IGNORE,
+                            FILENAME_PATTERN 'fp_{tag}_{{i}}')""")
+    n, latest = con.execute(
+        f"SELECT count(*), count(*) FILTER (WHERE is_latest) "
+        f"FROM read_parquet('{FACTS_PIT}/*/fp_{tag}_*.parquet')").fetchone()
+    print(f"DONE {lo}-{hi}: {n:,} rows, {latest:,} flagged is_latest "
+          f"({100 * latest / n:.1f}%)")
+
+
 def register() -> None:
     md = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
 
@@ -148,7 +188,7 @@ def register() -> None:
     md.execute("DROP VIEW IF EXISTS marts.facts_dimensioned")
     md.execute(f"""
         CREATE VIEW marts.facts_dimensioned AS SELECT * FROM read_parquet(
-            '{FACTS_DIM}/*/*.parquet', hive_partitioning = true, union_by_name = true)""")
+            '{FACTS_PIT}/*/*.parquet', hive_partitioning = true, union_by_name = true)""")
 
     for name in ("ref.dimension_index", "marts.facts_dimensioned"):
         print(f"view  {name}  "
@@ -169,7 +209,7 @@ def register() -> None:
             FROM marts.facts_dimensioned f
             JOIN ref.dimension_index d
               ON d.dimhash = f.dimh AND d.period = f.period
-            WHERE d.axis = '{axis}'""")
+            WHERE d.axis = '{axis}' AND f.is_latest""")
     print(f"      {len(NAMED_AXES)} named axis views created")
 
     # The two axes asked for by name get a classified column on top of the raw member,
@@ -274,10 +314,15 @@ def register() -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--archives", default="")
+    ap.add_argument("--period-years", default="")
     ap.add_argument("--register", action="store_true")
     args = ap.parse_args()
     if args.register:
         register()
+        return
+    if args.period_years:
+        lo, _, hi = args.period_years.partition("-")
+        flag(int(lo), int(hi or lo))
         return
     lo, _, hi = args.archives.partition("-")
     build(int(lo), int(hi or lo))

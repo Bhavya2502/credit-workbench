@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       parts:
-        description: "all | build | register | verify"
+        description: "all | build | flag | register | verify"
         required: true
         default: all
         type: choice
-        options: [all, build, register, verify]
+        options: [all, build, flag, register, verify]
 
 env:
   MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
@@ -35,9 +35,30 @@ jobs:
       - run: uv sync
       - run: uv run python -m credit_workbench.transform.dimensions --archives ${{ matrix.archives }}
 
-  register:
-    if: always() && (needs.build.result == 'success' || inputs.parts == 'register')
+  flag:
+    # Ranks the filings that report each figure, so a query gets one vintage rather
+    # than the four-or-so copies the lake holds. Batched by period year because every
+    # copy of a figure shares its period end.
+    if: always() && (needs.build.result == 'success'
+                     || inputs.parts == 'flag' || inputs.parts == 'all')
     needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      max-parallel: 3
+      fail-fast: false
+      matrix:
+        period_years: ["2008-2013", "2014-2016", "2017-2018", "2019-2020",
+                       "2021-2022", "2023-2023", "2024-2024", "2025-2030"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.dimensions --period-years ${{ matrix.period_years }}
+
+  register:
+    if: always() && (needs.flag.result == 'success' || inputs.parts == 'register')
+    needs: [build, flag]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
