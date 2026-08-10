@@ -155,17 +155,30 @@ def flag(lo: int, hi: int) -> None:
     partition instead of rescanning the source archives.
     """
     con = connect()
-    globs = ", ".join(f"'{FACTS_DIM}/period_year={y}/*.parquet'"
-                      for y in range(lo, hi + 1))
-    tag = f"p{lo}_{hi}"
-    print(f"Flagging point-in-time vintage for period years {lo}-{hi} ...")
+    if lo == 0:
+        # The tail: comparatives reaching back before 2008 and maturity schedules
+        # running past 2030, plus a handful of filer typos. Only ~497k facts, but
+        # dropping them silently would be worse than carrying the typos. One glob over
+        # the whole dataset with a filter on the partition column, which DuckDB prunes
+        # to just these partitions rather than reading all 222m rows.
+        source = (f"read_parquet('{FACTS_DIM}/*/*.parquet', hive_partitioning = true, "
+                  f"union_by_name = true)")
+        where = "WHERE period_year IS NULL OR period_year < 2008 OR period_year > 2030"
+        tag, label = "ptail", "outside 2008-2030"
+    else:
+        globs = ", ".join(f"'{FACTS_DIM}/period_year={y}/*.parquet'"
+                          for y in range(lo, hi + 1))
+        source = f"read_parquet([{globs}], hive_partitioning = true, union_by_name = true)"
+        where = ""
+        tag, label = f"p{lo}_{hi}", f"{lo}-{hi}"
+    print(f"Flagging point-in-time vintage for period years {label} ...")
     con.execute(f"""
         COPY (
             SELECT *,
                    filed = max(filed) OVER w AS is_latest,
                    filed = min(filed) OVER w AS is_first_report,
                    count(*) OVER w           AS filings_reporting
-            FROM read_parquet([{globs}], hive_partitioning = true, union_by_name = true)
+            FROM {source} {where}
             WINDOW w AS (PARTITION BY cik, period_end, qtrs, tag, dimh,
                                       coalesce(coreg, ''), uom)
         ) TO '{FACTS_PIT}' (FORMAT PARQUET, COMPRESSION ZSTD,
@@ -321,6 +334,9 @@ def main() -> None:
         register()
         return
     if args.period_years:
+        if args.period_years == "tail":
+            flag(0, 0)
+            return
         lo, _, hi = args.period_years.partition("-")
         flag(int(lo), int(hi or lo))
         return

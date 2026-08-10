@@ -95,6 +95,16 @@ CHECKS: list[tuple[str, str, str]] = [
         WHERE l.levels_sum IS NOT NULL AND abs(t.total) > 1e6""",
      "compared > 1000 and pct_tie > 80"),
 
+    # The flag pass is batched, so this is the guard against a batch silently not
+    # carrying its rows over - which is exactly what happened when the period-year
+    # window stopped at 2008 and left 496,846 older comparatives behind.
+    ("the flagged layer carries every fact the build wrote",
+     """SELECT (SELECT count(*) FROM marts.facts_dimensioned) AS flagged,
+               (SELECT count(*) FROM read_parquet(
+                    'r2://credit-workbench-raw/parquet/derived/facts_dimensioned/*/*.parquet',
+                    hive_partitioning = true, union_by_name = true)) AS built""",
+     "flagged == built"),
+
     ("the dimensioned layer carries point-in-time flags",
      """SELECT count(*) AS facts,
                count(*) FILTER (WHERE is_latest) AS latest,

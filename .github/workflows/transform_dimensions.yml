@@ -49,7 +49,7 @@ jobs:
       fail-fast: false
       matrix:
         period_years: ["2008-2013", "2014-2016", "2017-2018", "2019-2020",
-                       "2021-2022", "2023-2023", "2024-2024", "2025-2030"]
+                       "2021-2022", "2023-2023", "2024-2024", "2025-2030", "tail"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
