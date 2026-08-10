@@ -43,6 +43,16 @@ CATEGORIES: dict[str, dict[str, list[str]]] = {
         "op_lease_imputed_interest": ["LesseeOperatingLeaseLiabilityUndiscountedExcessAmount"],
     },
     "finance_lease": {
+        # The finance-lease ladder was missing while the operating-lease one was
+        # captured, which left the two halves of lease obligation asymmetric.
+        "fin_lease_due_y1": ["FinanceLeaseLiabilityPaymentsDueNextTwelveMonths"],
+        "fin_lease_due_y2": ["FinanceLeaseLiabilityPaymentsDueYearTwo"],
+        "fin_lease_due_y3": ["FinanceLeaseLiabilityPaymentsDueYearThree"],
+        "fin_lease_due_y4": ["FinanceLeaseLiabilityPaymentsDueYearFour"],
+        "fin_lease_due_y5": ["FinanceLeaseLiabilityPaymentsDueYearFive"],
+        "fin_lease_due_thereafter": ["FinanceLeaseLiabilityPaymentsDueAfterYearFive"],
+        "fin_lease_undiscounted_total": ["FinanceLeaseLiabilityPaymentsDue"],
+        "fin_lease_imputed_interest": ["FinanceLeaseLiabilityUndiscountedExcessAmount"],
         "fin_lease_liability": ["FinanceLeaseLiability"],
         "fin_lease_liability_current": ["FinanceLeaseLiabilityCurrent"],
         "fin_lease_liability_noncurrent": ["FinanceLeaseLiabilityNoncurrent"],
@@ -75,6 +85,28 @@ CATEGORIES: dict[str, dict[str, list[str]]] = {
             "DebtInstrumentUnamortizedDiscount",
             "DebtInstrumentUnamortizedDiscountPremiumAndDebtIssuanceCostsNet"],
         "debt_fair_value": ["DebtInstrumentFairValue", "LongTermDebtFairValue"],
+    },
+    # Amortisation already contracted for: a known drag on future earnings that no
+    # forward-looking analysis should have to guess at.
+    "intangible_amortisation_schedule": {
+        "intangible_amort_y1": [
+            "FiniteLivedIntangibleAssetsAmortizationExpenseNextTwelveMonths"],
+        "intangible_amort_y2": ["FiniteLivedIntangibleAssetsAmortizationExpenseYearTwo"],
+        "intangible_amort_y3": ["FiniteLivedIntangibleAssetsAmortizationExpenseYearThree"],
+        "intangible_amort_y4": ["FiniteLivedIntangibleAssetsAmortizationExpenseYearFour"],
+        "intangible_amort_y5": ["FiniteLivedIntangibleAssetsAmortizationExpenseYearFive"],
+        "intangible_amort_remainder_fy": [
+            "FiniteLivedIntangibleAssetsAmortizationExpenseRemainderOfFiscalYear"],
+        "intangible_gross": ["FiniteLivedIntangibleAssetsGross"],
+        "intangible_accumulated_amortisation": [
+            "FiniteLivedIntangibleAssetsAccumulatedAmortization"],
+    },
+    # Gross and accumulated depreciation behind net PP&E - filers declare these as
+    # components of the net figure we already map, so the pair completes it.
+    "ppe_detail": {
+        "ppe_gross": ["PropertyPlantAndEquipmentGross"],
+        "ppe_accumulated_depreciation": [
+            "AccumulatedDepreciationDepletionAndAmortizationPropertyPlantAndEquipment"],
     },
     "one_off_items": {
         "restructuring_charge": ["RestructuringCharges"],

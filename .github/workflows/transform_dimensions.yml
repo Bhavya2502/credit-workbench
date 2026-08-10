@@ -1,0 +1,59 @@
+name: transform-dimensions
+# Every dimensioned fact — the note schedules — plus the axis index and tag catalog.
+on:
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: "all | build | register | verify"
+        required: true
+        default: all
+        type: choice
+        options: [all, build, register, verify]
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+jobs:
+  build:
+    if: inputs.parts == 'all' || inputs.parts == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      max-parallel: 3
+      fail-fast: false
+      matrix:
+        # Finer batches for recent years: filings carry far more dimensioned detail
+        # now than in 2009, so an even split by year would not be an even split by row.
+        archives: ["2009-2012", "2013-2015", "2016-2018", "2019-2020",
+                   "2021-2022", "2023-2023", "2024-2024", "2025-2026"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.dimensions --archives ${{ matrix.archives }}
+
+  register:
+    if: always() && (needs.build.result == 'success' || inputs.parts == 'register')
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.dimensions --register
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_dimensions
+
+  verify:
+    if: inputs.parts == 'verify'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.verify_dimensions
