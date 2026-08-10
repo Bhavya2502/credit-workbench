@@ -122,7 +122,8 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM (SELECT coalesce(intangible_amort_y1, 0) + coalesce(intangible_amort_y2, 0)
                      + coalesce(intangible_amort_y3, 0) + coalesce(intangible_amort_y4, 0)
                      + coalesce(intangible_amort_y5, 0)
-                     + coalesce(intangible_amort_thereafter, 0) AS ladder,
+                     + coalesce(intangible_amort_thereafter, 0)
+                     + coalesce(intangible_amort_remainder_fy, 0) AS ladder,
                      intangible_gross - intangible_accumulated_amortisation AS net_carrying
               FROM marts.adjustment_inputs
               WHERE basis = 'latest' AND intangible_gross > 0
@@ -139,13 +140,14 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM (SELECT coalesce(op_lease_due_y1, 0) + coalesce(op_lease_due_y2, 0)
                      + coalesce(op_lease_due_y3, 0) + coalesce(op_lease_due_y4, 0)
                      + coalesce(op_lease_due_y5, 0)
-                     + coalesce(op_lease_due_thereafter, 0) AS ladder,
+                     + coalesce(op_lease_due_thereafter, 0)
+                     + coalesce(op_lease_due_remainder_fy, 0) AS ladder,
                      op_lease_undiscounted_total
               FROM marts.adjustment_inputs
               WHERE basis = 'latest' AND op_lease_undiscounted_total > 0
                 AND op_lease_due_y1 IS NOT NULL)""",
      # Was 49.5% before the AfterYearFour and rolling rungs were added.
-     "compared > 50000 and pct_tie > 70"),
+     "compared > 50000 and pct_tie > 80"),
 
     ("finance lease ladder sums to the undiscounted total filers report",
      """SELECT count(*) AS compared,
@@ -155,7 +157,8 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM (SELECT coalesce(fin_lease_due_y1, 0) + coalesce(fin_lease_due_y2, 0)
                      + coalesce(fin_lease_due_y3, 0) + coalesce(fin_lease_due_y4, 0)
                      + coalesce(fin_lease_due_y5, 0)
-                     + coalesce(fin_lease_due_thereafter, 0) AS ladder,
+                     + coalesce(fin_lease_due_thereafter, 0)
+                     + coalesce(fin_lease_due_remainder_fy, 0) AS ladder,
                      fin_lease_undiscounted_total
               FROM marts.adjustment_inputs
               WHERE basis = 'latest' AND fin_lease_undiscounted_total > 0

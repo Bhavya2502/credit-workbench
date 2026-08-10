@@ -49,8 +49,18 @@ CATEGORIES: dict[str, dict[str, list[str]]] = {
                             "LesseeOperatingLeaseLiabilityPaymentsDueInRollingYearFour"],
         "op_lease_due_y5": ["LesseeOperatingLeaseLiabilityPaymentsDueYearFive",
                             "LesseeOperatingLeaseLiabilityPaymentsDueInRollingYearFive"],
+        # An interim filer's ladder opens with the stub to the end of the current
+        # fiscal year and then runs in full-year buckets, so this is an extra rung
+        # rather than a replacement for the first one: in 6,904 filings its value is
+        # exactly the amount by which y1..y4 fell short of the reported total. Note
+        # the concept has no "Due" in its name, unlike every other rung.
+        "op_lease_due_remainder_fy": [
+            "LesseeOperatingLeaseLiabilityPaymentsRemainderOfFiscalYear"],
+        # `ToBePaid...` is the newer taxonomy spelling of the same tail.
         "op_lease_due_thereafter": ["LesseeOperatingLeaseLiabilityPaymentsDueAfterYearFive",
                                     "LesseeOperatingLeaseLiabilityPaymentsDueAfterYearFour",
+                                    "LesseeOperatingLeaseLiabilityToBePaidAfterYearFour",
+                                    "LesseeOperatingLeaseLiabilityToBePaidDueAfterYearFour",
                                     "LesseeOperatingLeaseLiabilityPaymentsDueAfterRollingYearFive"],
         "op_lease_undiscounted_total": ["LesseeOperatingLeaseLiabilityPaymentsDue"],
         "op_lease_imputed_interest": ["LesseeOperatingLeaseLiabilityUndiscountedExcessAmount"],
@@ -68,8 +78,11 @@ CATEGORIES: dict[str, dict[str, list[str]]] = {
                              "FinanceLeaseLiabilityPaymentsDueInRollingYearFour"],
         "fin_lease_due_y5": ["FinanceLeaseLiabilityPaymentsDueYearFive",
                              "FinanceLeaseLiabilityPaymentsDueInRollingYearFive"],
+        "fin_lease_due_remainder_fy": [
+            "FinanceLeaseLiabilityPaymentsRemainderOfFiscalYear"],
         "fin_lease_due_thereafter": ["FinanceLeaseLiabilityPaymentsDueAfterYearFive",
                                      "FinanceLeaseLiabilityPaymentsDueAfterYearFour",
+                                     "FinanceLeaseLiabilityToBePaidAfterYearFour",
                                      "FinanceLeaseLiabilityPaymentsDueInRollingAfterYearFive"],
         "fin_lease_undiscounted_total": ["FinanceLeaseLiabilityPaymentsDue"],
         "fin_lease_imputed_interest": ["FinanceLeaseLiabilityUndiscountedExcessAmount"],
@@ -79,6 +92,22 @@ CATEGORIES: dict[str, dict[str, list[str]]] = {
         "fin_lease_rou_asset": ["FinanceLeaseRightOfUseAsset"],
         "fin_lease_interest": ["FinanceLeaseInterestExpense"],
         "fin_lease_amortisation": ["FinanceLeaseRightOfUseAssetAmortization"],
+    },
+    # Leases before ASC 842. This family was the operating-lease disclosure through
+    # 2018 and still appears afterwards, so without it the lease history simply stops
+    # at the standard change. Held separately: ASC 840 minimum payments and ASC 842
+    # lease payments are not the same measure, and splicing them is the analyst's call.
+    "operating_lease_asc840": {
+        "op_lease_840_total": ["OperatingLeasesFutureMinimumPaymentsDue"],
+        "op_lease_840_y1": ["OperatingLeasesFutureMinimumPaymentsDueCurrent"],
+        "op_lease_840_y2": ["OperatingLeasesFutureMinimumPaymentsDueInTwoYears"],
+        "op_lease_840_y3": ["OperatingLeasesFutureMinimumPaymentsDueInThreeYears"],
+        "op_lease_840_y4": ["OperatingLeasesFutureMinimumPaymentsDueInFourYears"],
+        "op_lease_840_y5": ["OperatingLeasesFutureMinimumPaymentsDueInFiveYears"],
+        "op_lease_840_thereafter": ["OperatingLeasesFutureMinimumPaymentsDueThereafter"],
+        "op_lease_840_remainder_fy": [
+            "OperatingLeasesFutureMinimumPaymentsRemainderOfFiscalYear"],
+        "op_lease_840_rent_expense": ["OperatingLeasesRentExpenseNet"],
     },
     "pension_opeb": {
         "pension_obligation": ["DefinedBenefitPlanBenefitObligation"],
