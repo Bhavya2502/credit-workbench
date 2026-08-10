@@ -19,16 +19,24 @@ import duckdb
 from credit_workbench.common.config import motherduck_token
 
 Q: list[tuple[str, str]] = [
+    # Both marts hold every vintage, so the denominator must too. Filtering is_latest
+    # on one side only understated this at 81.6%.
     ("1. Reachability — is every filed fact in a mart?", """
         WITH filed AS (SELECT count(*) AS n FROM raw.fsn_num WHERE iprx = '0'
                          AND value IS NOT NULL AND value <> ''),
-             consolidated AS (SELECT count(*) AS n FROM staging.facts_pit WHERE is_latest),
+             consolidated AS (SELECT count(*) AS n FROM staging.facts_pit),
              dimensioned  AS (SELECT count(*) AS n FROM marts.facts_dimensioned)
         SELECT (SELECT n FROM filed)                       AS facts_filed,
-               (SELECT n FROM consolidated)                AS in_facts_pit_latest,
+               (SELECT n FROM consolidated)                AS in_facts_pit,
                (SELECT n FROM dimensioned)                 AS in_facts_dimensioned,
                round(100.0 * ((SELECT n FROM consolidated) + (SELECT n FROM dimensioned))
                      / (SELECT n FROM filed), 1)           AS pct_reachable"""),
+
+    ("1b. Of those, one vintage per figure — what a query returns by default", """
+        SELECT (SELECT count(*) FROM staging.facts_pit WHERE is_latest)
+                   AS consolidated_latest,
+               (SELECT count(*) FROM marts.facts_dimensioned WHERE is_latest)
+                   AS schedules_latest"""),
 
     ("2. Tags — reachable, labelled, modelled", """
         SELECT count(*)                                            AS tags_total,
@@ -58,7 +66,7 @@ Q: list[tuple[str, str]] = [
                        regexp_replace(table_name, '^dim_', '') AS axis_view,
                        'marts.' || table_name AS view_name
                    FROM information_schema.tables
-                   WHERE table_schema = 'marts' AND table_name LIKE 'dim\\_%') v
+                   WHERE table_schema = 'marts' AND starts_with(table_name, 'dim_')) v
           ON lower(replace(v.axis_view, '_', '')) = lower(c.axis)
         ORDER BY c.member_rows DESC LIMIT 20"""),
 
