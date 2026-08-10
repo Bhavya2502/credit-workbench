@@ -59,8 +59,59 @@ Q: list[tuple[str, str]] = [
           AND tag LIKE 'FiniteLivedIntangibleAssetsAmortizationExpense%'
         GROUP BY 1 ORDER BY 1"""),
 
-    # The op-lease ladder ties only half the time, so the rung vocabulary is wider than
-    # what D1 maps. List the rungs filers actually use, most-used first.
+    # Did adding the AfterYearFour and Rolling rungs actually help? Both lease ladders
+    # publish their own undiscounted total, so they can be checked against themselves.
+    ("6. Post-fix: do the ladders tie to the totals filers report?", """
+        SELECT 'operating lease' AS ladder, count(*) AS compared,
+               round(100.0 * count(*) FILTER (
+                   WHERE abs(ladder - total) <= 0.02 * total) / count(*), 1) AS pct_tie
+        FROM (SELECT coalesce(op_lease_due_y1, 0) + coalesce(op_lease_due_y2, 0)
+                     + coalesce(op_lease_due_y3, 0) + coalesce(op_lease_due_y4, 0)
+                     + coalesce(op_lease_due_y5, 0) + coalesce(op_lease_due_thereafter, 0)
+                     AS ladder, op_lease_undiscounted_total AS total
+              FROM marts.adjustment_inputs
+              WHERE basis = 'latest' AND op_lease_undiscounted_total > 0
+                AND op_lease_due_y1 IS NOT NULL)
+        UNION ALL
+        SELECT 'finance lease', count(*),
+               round(100.0 * count(*) FILTER (
+                   WHERE abs(ladder - total) <= 0.02 * total) / count(*), 1)
+        FROM (SELECT coalesce(fin_lease_due_y1, 0) + coalesce(fin_lease_due_y2, 0)
+                     + coalesce(fin_lease_due_y3, 0) + coalesce(fin_lease_due_y4, 0)
+                     + coalesce(fin_lease_due_y5, 0) + coalesce(fin_lease_due_thereafter, 0)
+                     AS ladder, fin_lease_undiscounted_total AS total
+              FROM marts.adjustment_inputs
+              WHERE basis = 'latest' AND fin_lease_undiscounted_total > 0
+                AND fin_lease_due_y1 IS NOT NULL)"""),
+
+    ("7. Post-fix: intangible ladder against net carrying value (an identity)", """
+        SELECT count(*) AS compared,
+               round(100.0 * count(*) FILTER (
+                   WHERE abs(ladder - net_carrying) <= 0.05 * net_carrying) / count(*), 1)
+                   AS pct_tie,
+               round(100.0 * count(*) FILTER (WHERE ladder > net_carrying * 1.05)
+                     / count(*), 1) AS pct_ladder_too_high
+        FROM (SELECT coalesce(intangible_amort_y1, 0) + coalesce(intangible_amort_y2, 0)
+                     + coalesce(intangible_amort_y3, 0) + coalesce(intangible_amort_y4, 0)
+                     + coalesce(intangible_amort_y5, 0)
+                     + coalesce(intangible_amort_thereafter, 0) AS ladder,
+                     intangible_gross - intangible_accumulated_amortisation AS net_carrying
+              FROM marts.adjustment_inputs
+              WHERE basis = 'latest' AND intangible_gross > 0
+                AND intangible_accumulated_amortisation IS NOT NULL
+                AND intangible_amort_y1 IS NOT NULL
+                AND intangible_amort_thereafter IS NOT NULL)"""),
+
+    ("8. Coverage gained: company-periods now carrying each ladder", """
+        SELECT count(*) FILTER (WHERE op_lease_due_y1 IS NOT NULL)   AS op_lease,
+               count(*) FILTER (WHERE fin_lease_due_y1 IS NOT NULL)  AS fin_lease,
+               count(*) FILTER (WHERE debt_due_y1 IS NOT NULL)       AS debt,
+               count(*) FILTER (WHERE intangible_amort_y1 IS NOT NULL) AS intangible,
+               count(*) FILTER (WHERE ppe_gross IS NOT NULL)         AS ppe_gross
+        FROM marts.adjustment_inputs WHERE basis = 'latest'"""),
+
+    # The op-lease ladder tied only half the time, so the rung vocabulary is wider than
+    # what D1 mapped. List the rungs filers actually use, most-used first.
     ("5. The real rung vocabulary of each ladder", " UNION ALL ".join(f"""
         (SELECT '{name}' AS ladder, tag, count(DISTINCT adsh) AS filings,
                 (m.tag IS NOT NULL) AS mapped_in_d1
