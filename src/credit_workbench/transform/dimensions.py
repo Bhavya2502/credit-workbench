@@ -223,7 +223,14 @@ def register() -> None:
             JOIN ref.dimension_index d
               ON d.dimhash = f.dimh AND d.period = f.period
             WHERE d.axis = '{axis}' AND f.is_latest""")
-    print(f"      {len(NAMED_AXES)} named axis views created")
+    md.execute("DROP TABLE IF EXISTS ref.named_axis_view")
+    md.execute("""CREATE TABLE ref.named_axis_view (
+                      axis VARCHAR, view_name VARCHAR, purpose VARCHAR)""")
+    md.executemany("INSERT INTO ref.named_axis_view VALUES (?, ?, ?)",
+                   [(axis, f"marts.dim_{view}", purpose)
+                    for view, (axis, purpose) in NAMED_AXES.items()])
+    print(f"      {len(NAMED_AXES)} named axis views created, "
+          f"mapping published to ref.named_axis_view")
 
     # The two axes asked for by name get a classified column on top of the raw member,
     # because the member string alone is not what an analyst wants to group by.

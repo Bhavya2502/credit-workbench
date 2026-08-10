@@ -58,16 +58,12 @@ Q: list[tuple[str, str]] = [
 
     ("4. Axes — every one is reachable; these have a named front door", """
         SELECT c.axis, c.member_rows, c.distinct_members,
-               CASE WHEN v.view_name IS NOT NULL THEN v.view_name
-                    ELSE 'generic (marts.facts_dimensioned + ref.dimension_index)' END
-                   AS access
+               coalesce(v.view_name,
+                        'generic (marts.facts_dimensioned + ref.dimension_index)')
+                   AS access,
+               coalesce(v.purpose, '') AS purpose
         FROM ref.dimension_catalog c
-        LEFT JOIN (SELECT DISTINCT
-                       regexp_replace(table_name, '^dim_', '') AS axis_view,
-                       'marts.' || table_name AS view_name
-                   FROM information_schema.tables
-                   WHERE table_schema = 'marts' AND starts_with(table_name, 'dim_')) v
-          ON lower(replace(v.axis_view, '_', '')) = lower(c.axis)
+        LEFT JOIN ref.named_axis_view v ON v.axis = c.axis
         ORDER BY c.member_rows DESC LIMIT 20"""),
 
     ("5. The structured marts and what they hold", """
