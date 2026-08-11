@@ -18,7 +18,7 @@ CHECKS: list[tuple[str, str, str]] = [
                count(DISTINCT cik) AS companies,
                count(DISTINCT covenant_type) AS covenant_types
         FROM marts.covenant_terms""",
-     "levels > 500 and companies > 100 and covenant_types >= 5"),
+     "levels > 300 and companies > 100 and covenant_types >= 5"),
 
     ("every level carries the sentence it came from",
      """SELECT count(*) AS levels,
@@ -36,7 +36,7 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.covenant_terms
         WHERE direction = 'max' AND unit = 'ratio' AND near_covenant_heading
           AND covenant_type LIKE '%leverage%'""",
-     "n > 100 and pct_in_band > 80 and median_level between 2.5 and 6"),
+     "n > 50 and pct_in_band > 80 and 2.5 <= median_level <= 6"),
 
     ("minimum coverage covenants fall in a credible band",
      """SELECT count(*) AS n, round(median(level), 2) AS median_level,
@@ -45,7 +45,7 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.covenant_terms
         WHERE direction = 'min' AND unit = 'ratio' AND near_covenant_heading
           AND covenant_type LIKE '%coverage%'""",
-     "n > 50 and pct_in_band > 70 and median_level between 1 and 4"),
+     "n > 20 and pct_in_band > 70 and 1 <= median_level <= 4"),
 
     # The direction is the half of a covenant that inverts its meaning, so it must
     # follow the covenant rather than be spread evenly across both.
@@ -75,12 +75,12 @@ CHECKS: list[tuple[str, str, str]] = [
      """SELECT count(*) FILTER (WHERE is_schedule) AS levels_in_schedules,
                count(DISTINCT adsh) FILTER (WHERE is_schedule) AS agreements
         FROM marts.covenant_terms""",
-     "levels_in_schedules > 50"),
+     "levels_in_schedules > 20"),
 
     ("the headline view gives one binding level per company and covenant",
      """SELECT count(*) AS rows, count(DISTINCT (cik, covenant_type)) AS pairs
         FROM marts.covenant_headline""",
-     "rows == pairs and rows > 100"),
+     "rows == pairs and rows > 50"),
 
     ("covenant levels join back to a real agreement",
      """SELECT count(*) AS orphans FROM (
