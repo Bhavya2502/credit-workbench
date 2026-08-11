@@ -6,7 +6,7 @@ before writing a section splitter, establish on actual documents -
 
   scale       how many 10-Ks, how big, and therefore how long a backfill takes at
               SEC's fair-access rate
-  addressing  whether `primaryDocument` in the filing index resolves to the document,
+  addressing  whether `primary_document` in the filing index resolves to the document,
               which would save one request per filing over reading an index
   splitting   whether "Item 1A." style headers can actually be found, and how badly
               the table of contents duplicates them - the classic trap, since a naive
@@ -88,14 +88,14 @@ def main() -> None:
                     WHEN form LIKE '20-F%' THEN '20-F (foreign issuers)'
                     ELSE form END AS form_group,
                count(*) AS filings,
-               count(*) FILTER (WHERE primaryDocument IS NOT NULL
-                                  AND primaryDocument <> '') AS with_primary_doc,
+               count(*) FILTER (WHERE primary_document IS NOT NULL
+                                  AND primary_document <> '') AS with_primary_doc,
                round(sum(TRY_CAST(size AS BIGINT)) / 1e9, 1) AS total_submission_gb
         FROM ref.filing_index
         WHERE form LIKE '10-K%' OR form LIKE '20-F%'
         GROUP BY 1 ORDER BY filings DESC""").fetchall()
     for r in rows:
-        print(f"  {r[0]:<24} filings={r[1]:>8,}  with primaryDocument={r[2]:>8,}  "
+        print(f"  {r[0]:<24} filings={r[1]:>8,}  with primary_document={r[2]:>8,}  "
               f"full submissions={r[3]} GB")
 
     print("\n### 2. 10-K filings by year")
@@ -117,10 +117,10 @@ def main() -> None:
 
     # ---------------------------------------------------------------- live fetches
     samples = con.execute("""
-        SELECT cik, accession_number, primaryDocument, filing_date,
+        SELECT cik, accession_number, primary_document, filing_date,
                TRY_CAST(size AS BIGINT) AS size
         FROM ref.filing_index
-        WHERE form = '10-K' AND primaryDocument LIKE '%.htm'
+        WHERE form = '10-K' AND primary_document LIKE '%.htm'
           AND filing_date >= '2023-01-01'
         USING SAMPLE 4 ROWS""").fetchall()
 
