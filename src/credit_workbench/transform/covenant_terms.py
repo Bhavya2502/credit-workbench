@@ -1,0 +1,287 @@
+"""Financial covenant levels, with the sentence each one came from.
+
+Nothing else in the workbench holds a covenant level. `quali.note_signals` can say a
+waiver was mentioned and `marts.credit_events` catches an acceleration after the fact;
+neither knows what the borrower actually promised.
+
+Two findings from reading the agreements shape this, and both rule out the obvious
+parser.
+
+Most ratios in a credit agreement are not covenants. They are incurrence tests -
+conditions attached to a disposition, an investment, a restricted payment or the
+incurrence of more debt ("at the election of the Initial Borrower... the First Lien
+Leverage Ratio would not exceed 2.00:1.00"). Taking every ratio near the words "leverage
+ratio" would fill this mart with basket thresholds that look exactly like covenants.
+
+Section boundaries alone are not enough to separate them either. The heading sometimes
+sits on its own line with the covenant in sub-paragraphs beneath it, and sometimes runs
+straight into the text; anchoring on it gave sections of 23 characters in one agreement
+and 118,606 in another.
+
+So the anchor is the obligation itself - "shall not permit the X Ratio ... to be greater
+than 4.50:1.00" - which is how a maintenance covenant is written and an incurrence test
+is not. Proximity to a financial covenant heading raises confidence rather than deciding
+the matter, incurrence phrasing rules a sentence out, and every row keeps the sentence
+it came from so a reader can check the machine.
+
+A covenant is also a schedule, not a number: 83% of covenant sections carry more than
+one level and half are laid out against dates, so each level is its own row.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+
+import duckdb
+
+from credit_workbench.common.config import R2, motherduck_token
+
+LAKE = "r2://credit-workbench-raw"
+EXHIBITS = f"{LAKE}/parquet/sec/narrative/exhibits"
+OUT = f"{LAKE}/parquet/derived/covenant_terms"
+
+COVENANT_TYPES = [
+    ("first_lien_leverage", r"first[\s-]lien\s+(?:net\s+)?leverage ratio"),
+    ("senior_secured_leverage", r"(?:senior\s+)?secured\s+(?:net\s+)?leverage ratio"),
+    ("total_net_leverage", r"(?:consolidated\s+)?total\s+net\s+leverage ratio"),
+    ("net_leverage", r"(?:consolidated\s+)?net\s+leverage ratio"),
+    ("total_leverage", r"(?:consolidated\s+)?(?:total\s+)?leverage ratio"),
+    ("debt_to_ebitda", r"(?:debt|indebtedness)\s+to\s+ebitda"),
+    ("interest_coverage", r"(?:consolidated\s+)?(?:net\s+)?interest (?:expense )?coverage ratio"),
+    ("fixed_charge_coverage", r"fixed charge coverage ratio"),
+    ("debt_service_coverage", r"debt service coverage ratio"),
+    ("current_ratio", r"current ratio"),
+    ("net_worth", r"(?:consolidated\s+)?(?:tangible\s+)?net worth"),
+    ("minimum_liquidity", r"minimum liquidity|liquidity\s+(?:shall|of not less)"),
+    ("minimum_ebitda", r"minimum\s+(?:consolidated\s+)?ebitda"),
+]
+COVENANT_RES = [(name, re.compile(p, re.IGNORECASE)) for name, p in COVENANT_TYPES]
+
+# How a standing obligation is phrased. An incurrence test never reads like this.
+OBLIGATION_RE = re.compile(
+    r"(shall not (?:be permitted to )?(?:permit|suffer or permit|allow|cause)"
+    r"|will not (?:permit|allow)|shall (?:at all times )?maintain"
+    r"|shall not (?:exceed|be less than)|^permit\b|\bpermit the\b)",
+    re.IGNORECASE)
+
+# The obligation clause carries the negation and the comparison sits well away from it
+# - "shall not permit the Leverage Ratio ... to be greater than 4.50:1.00" - so the
+# comparison word alone fixes the direction. Requiring "not greater than" adjacently
+# matched almost nothing.
+#
+# The minimum test runs first because "at least equal to or greater than" is a floor
+# despite containing "greater than".
+MIN_RE = re.compile(
+    r"(?:at\s+least|no\s+less\s+than|not\s+less\s+than|less\s+than|minimum"
+    r"|not\s+fall\s+below|equal\s+to\s+or\s+greater\s+than)",
+    re.IGNORECASE)
+MAX_RE = re.compile(
+    r"(?:greater\s+than|more\s+than|exceed|in\s+excess\s+of|maximum)",
+    re.IGNORECASE)
+
+# Language that marks a test attached to an action rather than a standing obligation.
+INCURRENCE_RE = re.compile(
+    r"(after giving (?:pro forma )?effect|in connection with|at the election of"
+    r"|on a pro forma basis|pro forma basis|would not exceed|immediately prior to"
+    r"|for purposes of (?:determining|calculating)|applicable margin|pricing grid"
+    r"|disposition percentage|excess cash flow|permitted acquisition|may (?:make|incur)"
+    r"|is permitted to|so long as)",
+    re.IGNORECASE)
+
+RATIO_RE = re.compile(
+    r"(\d{1,2}(?:\.\d{1,3})?)\s*(?::|\s+to\s+|\s*/\s*)\s*1(?:\.0{1,3})?\b")
+MONEY_RE = re.compile(r"\$\s?([\d,]+(?:\.\d+)?)\s*(million|billion|mm|bn)?", re.IGNORECASE)
+
+HEADING_RE = re.compile(
+    r"^[ \t]*(?:(?:section|article)\s+[\dIVXLC]+(?:\.\d+)*[.\s-]*)?"
+    r"(financial covenants?|financial condition covenants?"
+    r"|financial performance covenants?)\b",
+    re.IGNORECASE | re.MULTILINE)
+
+PERIOD_RE = re.compile(
+    r"((?:march|june|september|december)\s+\d{1,2},?\s+20\d\d"
+    r"|fiscal (?:quarter|year) ending [^,.;]{0,40}20\d\d|thereafter)",
+    re.IGNORECASE)
+
+SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+(?=[A-Z(])")
+
+
+def covenant_type(sentence: str) -> str | None:
+    for name, rx in COVENANT_RES:
+        if rx.search(sentence):
+            return name
+    return None
+
+
+def extract(text: str) -> list[dict]:
+    """Covenant levels stated as standing obligations, one row per level."""
+    heading_positions = [m.start() for m in HEADING_RE.finditer(text)]
+    rows: list[dict] = []
+
+    for para in SENTENCE_SPLIT.split(text):
+        if len(para) > 3000 or len(para) < 40:
+            continue
+        if not OBLIGATION_RE.search(para):
+            continue
+        ctype = covenant_type(para)
+        if not ctype:
+            continue
+        if INCURRENCE_RE.search(para):
+            continue
+
+        if MIN_RE.search(para):
+            direction = "min"
+        elif MAX_RE.search(para):
+            direction = "max"
+        else:
+            continue                      # no comparison stated: not a usable level
+
+        levels = [m.group(1) for m in RATIO_RE.finditer(para)]
+        unit = "ratio"
+        if not levels and ctype in ("net_worth", "minimum_liquidity", "minimum_ebitda"):
+            for m in MONEY_RE.finditer(para):
+                amount = float(m.group(1).replace(",", ""))
+                scale = (m.group(2) or "").lower()
+                amount *= 1e6 if scale in ("million", "mm") else (
+                    1e9 if scale in ("billion", "bn") else 1)
+                levels.append(str(amount))
+            unit = "usd"
+        if not levels:
+            continue
+
+        # Closeness to a financial covenant heading is corroboration, not the test.
+        nearest = min((abs(para_pos - h) for h in heading_positions
+                       for para_pos in [text.find(para[:80])] if para_pos >= 0),
+                      default=10 ** 9)
+        periods = [m.group(1) for m in PERIOD_RE.finditer(para)]
+
+        for i, level in enumerate(dict.fromkeys(levels)):
+            rows.append({
+                "covenant_type": ctype,
+                "direction": direction,
+                "level": float(level),
+                "unit": unit,
+                "level_index": i,
+                "is_schedule": len(set(levels)) > 1,
+                "applies_from": periods[i] if i < len(periods) else None,
+                "near_covenant_heading": nearest < 4000,
+                "chars_from_heading": min(nearest, 10 ** 6),
+                "sentence": re.sub(r"\s+", " ", para)[:600],
+            })
+    return rows
+
+
+def connect() -> duckdb.DuckDBPyConnection:
+    cfg = R2.from_env()
+    con = duckdb.connect()
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute(f"""
+        CREATE OR REPLACE SECRET r2_lake (
+            TYPE R2, KEY_ID '{cfg.access_key_id}', SECRET '{cfg.secret_access_key}',
+            ACCOUNT_ID '{cfg.account_id}', REGION 'auto')""")
+    con.execute("SET memory_limit = '9GB'")
+    con.execute("SET preserve_insertion_order = false")
+    con.execute("SET temp_directory = '/tmp/duckdb'")
+    return con
+
+
+def build(sample: int = 0) -> None:
+    con = connect()
+    con.execute(f"""
+        CREATE OR REPLACE TABLE docs AS
+        SELECT cik, adsh, form, filing_date, exhibit_number, doc_kind, char_len, text
+        FROM read_parquet('{EXHIBITS}/*/*.parquet', hive_partitioning = true,
+                          union_by_name = true)
+        WHERE doc_kind IN ('credit_agreement', 'amendment', 'note_purchase')
+        {f'ORDER BY hash(adsh) LIMIT {sample}' if sample else ''}""")
+    total = con.execute("SELECT count(*) FROM docs").fetchone()[0]
+    print(f"{total:,} agreements to read")
+
+    out: list[tuple] = []
+    processed = 0
+    for offset in range(0, total, 500):
+        batch = con.execute(
+            f"SELECT cik, adsh, form, filing_date, exhibit_number, doc_kind, text "
+            f"FROM docs LIMIT 500 OFFSET {offset}").fetchall()
+        for cik, adsh, form, filed, exhibit, kind, text in batch:
+            for row in extract(text or ""):
+                out.append((str(cik), str(adsh), form, str(filed), exhibit, kind,
+                            row["covenant_type"], row["direction"], row["level"],
+                            row["unit"], row["level_index"], row["is_schedule"],
+                            row["applies_from"], row["near_covenant_heading"],
+                            row["chars_from_heading"], row["sentence"]))
+        processed += len(batch)
+        if offset % 2500 == 0:
+            print(f"  {processed:,}/{total:,} agreements, {len(out):,} covenant rows")
+
+    if not out:
+        raise SystemExit("no covenant terms extracted - refusing to write an empty mart")
+
+    con.execute("""CREATE OR REPLACE TABLE terms (
+        cik VARCHAR, adsh VARCHAR, form VARCHAR, filing_date VARCHAR,
+        exhibit_number VARCHAR, doc_kind VARCHAR, covenant_type VARCHAR,
+        direction VARCHAR, level DOUBLE, unit VARCHAR, level_index INTEGER,
+        is_schedule BOOLEAN, applies_from VARCHAR, near_covenant_heading BOOLEAN,
+        chars_from_heading BIGINT, sentence VARCHAR)""")
+    con.executemany(
+        "INSERT INTO terms VALUES (" + ", ".join("?" * 16) + ")", out)
+    con.execute(f"""
+        COPY (SELECT *, CAST(substr(filing_date, 1, 4) AS INTEGER) AS filing_year
+              FROM terms)
+        TO '{OUT}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (filing_year),
+                    OVERWRITE_OR_IGNORE, FILENAME_PATTERN 'cov_{{i}}')""")
+    print(f"DONE: {len(out):,} covenant levels from {total:,} agreements")
+
+
+def register() -> None:
+    md = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
+    md.execute("DROP VIEW IF EXISTS marts.covenant_terms")
+    md.execute(f"""
+        CREATE VIEW marts.covenant_terms AS SELECT * FROM read_parquet(
+            '{OUT}/*/*.parquet', hive_partitioning = true, union_by_name = true)""")
+    rows, agreements, companies = md.execute("""
+        SELECT count(*), count(DISTINCT adsh), count(DISTINCT cik)
+        FROM marts.covenant_terms""").fetchone()
+    print(f"view  marts.covenant_terms  {rows:,} levels, {agreements:,} agreements, "
+          f"{companies:,} companies")
+
+    # The headline figure a lender wants: the binding level per company and covenant,
+    # taken from the most recent agreement and, where a schedule steps down, the
+    # tightest level in it.
+    md.execute("DROP VIEW IF EXISTS marts.covenant_headline")
+    md.execute("""
+        CREATE VIEW marts.covenant_headline AS
+        SELECT cik, covenant_type, direction, filing_date, adsh,
+               CASE WHEN direction = 'max' THEN min(level) ELSE max(level) END AS binding_level,
+               count(*) AS levels_in_schedule,
+               any_value(sentence) AS evidence
+        FROM marts.covenant_terms
+        WHERE near_covenant_heading
+        GROUP BY cik, covenant_type, direction, filing_date, adsh
+        QUALIFY row_number() OVER (
+            PARTITION BY cik, covenant_type ORDER BY filing_date DESC) = 1""")
+    n = md.execute("SELECT count(*) FROM marts.covenant_headline").fetchone()[0]
+    print(f"view  marts.covenant_headline  {n:,} company-covenant levels")
+
+    for row in md.execute("""
+        SELECT covenant_type, direction, count(*) AS levels,
+               count(DISTINCT cik) AS companies, round(median(level), 2) AS median_level
+        FROM marts.covenant_terms WHERE near_covenant_heading
+        GROUP BY 1, 2 ORDER BY levels DESC LIMIT 14""").fetchall():
+        print(f"  {row[0]:<26} {row[1]:<4} {row[2]:>7,} levels  "
+              f"{row[3]:>5,} companies  median {row[4]}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--sample", type=int, default=0)
+    ap.add_argument("--register", action="store_true")
+    args = ap.parse_args()
+    if args.register:
+        register()
+    else:
+        build(args.sample)
+
+
+if __name__ == "__main__":
+    main()
