@@ -261,59 +261,87 @@ def connect() -> duckdb.DuckDBPyConnection:
         CREATE OR REPLACE SECRET r2_lake (
             TYPE R2, KEY_ID '{cfg.access_key_id}', SECRET '{cfg.secret_access_key}',
             ACCOUNT_ID '{cfg.account_id}', REGION 'auto')""")
-    con.execute("SET memory_limit = '9GB'")
+    # Leaves headroom for the Python side, which holds a batch of agreement text and
+    # the rows extracted from it. At 9GB DuckDB and Python together took the runner
+    # down once the corpus reached 40,596 agreements.
+    con.execute("SET memory_limit = '5GB'")
     con.execute("SET preserve_insertion_order = false")
     con.execute("SET temp_directory = '/tmp/duckdb'")
     return con
 
 
-def build(sample: int = 0) -> None:
-    con = connect()
-    con.execute(f"""
-        CREATE OR REPLACE TABLE docs AS
-        SELECT cik, adsh, form, filing_date, exhibit_number, doc_kind, char_len, text
-        FROM read_parquet('{EXHIBITS}/*/*.parquet', hive_partitioning = true,
-                          union_by_name = true)
-        WHERE doc_kind IN ('credit_agreement', 'amendment', 'note_purchase')
-        {f'ORDER BY hash(adsh) LIMIT {sample}' if sample else ''}""")
-    total = con.execute("SELECT count(*) FROM docs").fetchone()[0]
-    print(f"{total:,} agreements to read")
-
-    out: list[tuple] = []
-    processed = 0
-    for offset in range(0, total, 500):
-        batch = con.execute(
-            f"SELECT cik, adsh, form, filing_date, exhibit_number, doc_kind, text "
-            f"FROM docs LIMIT 500 OFFSET {offset}").fetchall()
-        for cik, adsh, form, filed, exhibit, kind, text in batch:
-            for row in extract(text or ""):
-                out.append((str(cik), str(adsh), form, str(filed), exhibit, kind,
-                            row["covenant_type"], row["direction"], row["level"],
-                            row["unit"], row["level_index"], row["is_schedule"],
-                            row["applies_from"], row["near_covenant_heading"],
-                            row["confidence"], row["chars_from_heading"],
-                            row["sentence"]))
-        processed += len(batch)
-        if offset % 2500 == 0:
-            print(f"  {processed:,}/{total:,} agreements, {len(out):,} covenant rows")
-
-    if not out:
-        raise SystemExit("no covenant terms extracted - refusing to write an empty mart")
-
-    con.execute("""CREATE OR REPLACE TABLE terms (
+COLUMNS = """
         cik VARCHAR, adsh VARCHAR, form VARCHAR, filing_date VARCHAR,
         exhibit_number VARCHAR, doc_kind VARCHAR, covenant_type VARCHAR,
         direction VARCHAR, level DOUBLE, unit VARCHAR, level_index INTEGER,
         is_schedule BOOLEAN, applies_from VARCHAR, near_covenant_heading BOOLEAN,
-        confidence VARCHAR, chars_from_heading BIGINT, sentence VARCHAR)""")
-    con.executemany(
-        "INSERT INTO terms VALUES (" + ", ".join("?" * 17) + ")", out)
+        confidence VARCHAR, chars_from_heading BIGINT, sentence VARCHAR"""
+
+
+def build(sample: int = 0) -> None:
+    """Read the agreements a batch at a time, writing each batch out before the next.
+
+    An earlier version pulled every agreement's text into one table and accumulated all
+    the extracted rows in Python. That fitted at 12,164 agreements and took the runner
+    down at 40,596: the text alone is roughly eight gigabytes. Only the keys are held
+    now, the text arrives one batch at a time, and each batch is written before the
+    next is read.
+    """
+    con = connect()
+    con.execute(f"""
+        CREATE OR REPLACE TABLE keys AS
+        SELECT adsh, exhibit_number,
+               row_number() OVER (ORDER BY adsh, exhibit_number) AS rn
+        FROM read_parquet('{EXHIBITS}/*/*.parquet', hive_partitioning = true,
+                          union_by_name = true)
+        WHERE doc_kind IN ('credit_agreement', 'amendment', 'note_purchase')
+        {f'ORDER BY hash(adsh) LIMIT {sample}' if sample else ''}""")
+    total = con.execute("SELECT count(*) FROM keys").fetchone()[0]
+    print(f"{total:,} agreements to read")
+
+    con.execute(f"CREATE OR REPLACE TABLE terms ({COLUMNS})")
+    written = 0
+    batch_size = 400
+
+    for lo in range(0, total, batch_size):
+        batch = con.execute(f"""
+            SELECT e.cik, e.adsh, e.form, e.filing_date, e.exhibit_number, e.doc_kind,
+                   e.text
+            FROM read_parquet('{EXHIBITS}/*/*.parquet', hive_partitioning = true,
+                              union_by_name = true) e
+            JOIN keys k ON k.adsh = e.adsh
+                       AND k.exhibit_number IS NOT DISTINCT FROM e.exhibit_number
+            WHERE k.rn > {lo} AND k.rn <= {lo + batch_size}
+              AND e.doc_kind IN ('credit_agreement', 'amendment', 'note_purchase')
+        """).fetchall()
+
+        rows = []
+        for cik, adsh, form, filed, exhibit, kind, text in batch:
+            for row in extract(text or ""):
+                rows.append((str(cik), str(adsh), form, str(filed), exhibit, kind,
+                             row["covenant_type"], row["direction"], row["level"],
+                             row["unit"], row["level_index"], row["is_schedule"],
+                             row["applies_from"], row["near_covenant_heading"],
+                             row["confidence"], row["chars_from_heading"],
+                             row["sentence"]))
+        if rows:
+            con.executemany(
+                "INSERT INTO terms VALUES (" + ", ".join("?" * 17) + ")", rows)
+            written += len(rows)
+        del batch, rows
+        if lo % 4000 == 0:
+            print(f"  {min(lo + batch_size, total):,}/{total:,} agreements, "
+                  f"{written:,} covenant rows")
+
+    if not written:
+        raise SystemExit("no covenant terms extracted - refusing to write an empty mart")
+
     con.execute(f"""
         COPY (SELECT *, CAST(substr(filing_date, 1, 4) AS INTEGER) AS filing_year
               FROM terms)
         TO '{OUT}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (filing_year),
                     OVERWRITE_OR_IGNORE, FILENAME_PATTERN 'cov_{{i}}')""")
-    print(f"DONE: {len(out):,} covenant levels from {total:,} agreements")
+    print(f"DONE: {written:,} covenant levels from {total:,} agreements")
 
 
 def register() -> None:
