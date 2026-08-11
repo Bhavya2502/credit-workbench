@@ -21,11 +21,15 @@ import duckdb
 
 from credit_workbench.common.config import motherduck_token
 
-# Headings filers use for the maintenance covenant section.
+# Headings filers use for the maintenance covenant section. Deliberately not anchored
+# to the end of the line: a real heading runs straight on into its own paragraph
+# ("Financial Covenant. The Borrower shall not permit..."), so requiring the line to end
+# shortly after the name matched only contents-page entries. Rejecting the contents page
+# is the gap rule's job, not this pattern's.
 HEADING_RE = re.compile(
-    r"^[^\S\n]*(?:(?:section|article)\s+[\dIVXLC]+(?:\.\d+)*[.\s-]*)?"
+    r"^[ \t]*(?:(?:section|article)\s+[\dIVXLC]+(?:\.\d+)*[.\s-]*)?"
     r"(financial covenants?|financial condition covenants?"
-    r"|financial performance covenants?|covenant compliance)\b[^\n]{0,60}$",
+    r"|financial performance covenants?|covenant compliance)\b",
     re.IGNORECASE | re.MULTILINE)
 
 # Every numbered heading in the agreement. The covenant section runs from its own
@@ -33,8 +37,7 @@ HEADING_RE = re.compile(
 # heading instead let a table-of-contents entry run to the end of the document, which
 # is the same trap the 10-K splitter hit and the same rule that fixes it.
 SECTION_RE = re.compile(
-    r"^[^\S
-]*(?:section\s+)?(?:\d{1,2}\.\d{1,3}|article\s+[IVXLC]+|\d{1,2}\.\s)",
+    r"^[ \t]*(?:section\s+)?(?:\d{1,2}\.\d{1,3}|article\s+[IVXLC]+|\d{1,2}\.\s)",
     re.IGNORECASE | re.MULTILINE)
 
 RATIO_RE = re.compile(
