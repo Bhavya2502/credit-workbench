@@ -106,6 +106,26 @@ PERIOD_RE = re.compile(
 SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+(?=[A-Z(])")
 
 
+def direction_for(clause: str, at: int) -> str | None:
+    """The comparison closest before a level, which is the one that governs it.
+
+    Taking whichever pattern matched first anywhere in the clause left 630 leverage
+    covenants recorded as floors: a stray "not less than $1,000,000" in a proviso
+    outranked the "shall not exceed" that actually governed the ratio. A level is
+    governed by the comparison immediately preceding it.
+    """
+    window = clause[max(0, at - 160):at]
+    # "equal to or greater than" is a floor, but ends in a ceiling phrase, so it is
+    # rewritten before either pattern sees it.
+    window = re.sub(r"equal\s+to\s+or\s+greater\s+than", "at least", window,
+                    flags=re.IGNORECASE)
+    last_min = max((m.end() for m in MIN_RE.finditer(window)), default=-1)
+    last_max = max((m.end() for m in MAX_RE.finditer(window)), default=-1)
+    if last_min < 0 and last_max < 0:
+        return None
+    return "min" if last_min > last_max else "max"
+
+
 def covenant_clauses(para: str) -> list[tuple[str, str]]:
     """Split a sentence into one clause per covenant it names.
 
@@ -162,30 +182,36 @@ def extract(text: str) -> list[dict]:
                    if at >= 0 else 10 ** 9)
 
         for ctype, clause in covenant_clauses(para):
-            if MIN_RE.search(clause):
-                direction = "min"
-            elif MAX_RE.search(clause):
-                direction = "max"
-            else:
-                continue                  # no comparison stated: not a usable level
-
-            levels = [m.group(1) for m in RATIO_RE.finditer(clause)]
+            # (level, direction) pairs: each level takes the comparison governing it.
+            found: list[tuple[str, str]] = []
             unit = "ratio"
-            if not levels and ctype in ("net_worth", "minimum_liquidity",
-                                        "minimum_ebitda"):
+            for m in RATIO_RE.finditer(clause):
+                d = direction_for(clause, m.start())
+                if d:
+                    found.append((m.group(1), d))
+            if not found and ctype in ("net_worth", "minimum_liquidity",
+                                       "minimum_ebitda"):
                 for m in MONEY_RE.finditer(clause):
+                    d = direction_for(clause, m.start())
+                    if not d:
+                        continue
                     amount = float(m.group(1).replace(",", ""))
                     scale = (m.group(2) or "").lower()
                     amount *= 1e6 if scale in ("million", "mm") else (
                         1e9 if scale in ("billion", "bn") else 1)
-                    levels.append(str(amount))
+                    found.append((str(amount), d))
                 unit = "usd"
-            if not levels:
+            if not found:
                 continue
 
+            seen: dict[str, str] = {}
+            for level, d in found:
+                seen.setdefault(level, d)
+            levels = list(seen)
             periods = [m.group(1) for m in PERIOD_RE.finditer(clause)]
 
-            for i, level in enumerate(dict.fromkeys(levels)):
+            for i, level in enumerate(levels):
+                direction = seen[level]
                 rows.append({
                     "covenant_type": ctype,
                     "direction": direction,
