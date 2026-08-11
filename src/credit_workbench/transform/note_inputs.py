@@ -173,6 +173,69 @@ CATEGORIES: dict[str, dict[str, list[str]]] = {
         "ppe_accumulated_depreciation": [
             "AccumulatedDepreciationDepletionAndAmortizationPropertyPlantAndEquipment"],
     },
+    # ---- from the frontier analysis: the largest tags no mart claimed -------------
+    # Routed here rather than into the spread because these are company-year note
+    # figures, not statement lines. The debt-rate and facility tags that also ranked
+    # high are already modelled in the debt-instrument mart, per ref.modelled_tags.
+
+    # An effective rate far from the statutory rate, or a valuation allowance that
+    # swallows the deferred tax asset, both say the reported tax charge will not
+    # persist - which matters for any cash-flow forecast built off it.
+    "income_tax_detail": {
+        "effective_tax_rate": ["EffectiveIncomeTaxRateContinuingOperations"],
+        "statutory_tax_rate": [
+            "EffectiveIncomeTaxRateReconciliationAtFederalStatutoryIncomeTaxRate"],
+        "deferred_tax_assets_gross": ["DeferredTaxAssetsGross"],
+        "deferred_tax_assets_net": ["DeferredTaxAssetsNet",
+                                    "DeferredTaxAssetsLiabilitiesNet"],
+        "deferred_tax_valuation_allowance": ["DeferredTaxAssetsValuationAllowance"],
+        "deferred_tax_liabilities": ["DeferredTaxLiabilities"],
+        "unrecognised_tax_benefits": ["UnrecognizedTaxBenefits"],
+        "operating_loss_carryforward": ["OperatingLossCarryforwards"],
+    },
+
+    # Share counts are not spread lines, but nothing per-share or market-based can be
+    # computed without them, and the authorised-versus-issued gap is the headroom for
+    # equity issuance a lender may be counting on.
+    "capital_structure": {
+        "common_shares_authorised": ["CommonStockSharesAuthorized"],
+        "common_shares_issued": ["CommonStockSharesIssued"],
+        "common_shares_outstanding": ["CommonStockSharesOutstanding",
+                                      "SharesOutstanding"],
+        "common_par_value": ["CommonStockParOrStatedValuePerShare"],
+        "preferred_shares_authorised": ["PreferredStockSharesAuthorized"],
+        "preferred_shares_issued": ["PreferredStockSharesIssued"],
+        "preferred_shares_outstanding": ["PreferredStockSharesOutstanding"],
+        "preferred_par_value": ["PreferredStockParOrStatedValuePerShare"],
+        "treasury_shares": ["TreasuryStockShares", "TreasuryStockCommonShares"],
+        "weighted_average_shares_basic_diluted": [
+            "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"],
+        "entity_public_float": ["EntityPublicFloat"],
+    },
+
+    # The allowance against receivables, and the charge that feeds it, are the closest
+    # thing in the filing to a company's own view of its customers' credit.
+    "receivable_quality": {
+        "receivables_gross": ["AccountsReceivableGrossCurrent"],
+        "allowance_doubtful_accounts": [
+            "AllowanceForDoubtfulAccountsReceivableCurrent",
+            "AccountsReceivableAllowanceForCreditLossCurrent"],
+        "provision_doubtful_accounts": ["ProvisionForDoubtfulAccounts",
+                                        "AccountsReceivableCreditLossExpense"],
+    },
+
+    # Notional is the exposure a fair value nets away, so it belongs alongside it.
+    "derivatives": {
+        "derivative_notional": ["DerivativeNotionalAmount"],
+        "derivative_assets_fv": ["DerivativeAssets"],
+        "derivative_liabilities_fv": ["DerivativeLiabilities"],
+    },
+
+    "segment_counts": {
+        "reportable_segments": ["NumberOfReportableSegments"],
+        "operating_segments": ["NumberOfOperatingSegments"],
+    },
+
     "one_off_items": {
         "restructuring_charge": ["RestructuringCharges"],
         "impairment_goodwill": ["GoodwillImpairmentLoss"],

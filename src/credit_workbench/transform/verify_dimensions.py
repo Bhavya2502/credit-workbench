@@ -135,6 +135,35 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM ref.tag_catalog""",
      "tags == distinct_tags and with_schedules > 50000 and standard > 10000"),
 
+    # The frontier clusters: the largest tags no mart claimed, now routed to D1.
+    ("the frontier clusters landed in the adjustment inputs",
+     """SELECT count(*) FILTER (WHERE effective_tax_rate IS NOT NULL) AS tax_rate,
+               count(*) FILTER (WHERE common_shares_outstanding IS NOT NULL) AS shares,
+               count(*) FILTER (WHERE allowance_doubtful_accounts IS NOT NULL) AS allowance,
+               count(*) FILTER (WHERE derivative_notional IS NOT NULL) AS notional
+        FROM marts.adjustment_inputs WHERE basis = 'latest'""",
+     "tax_rate > 30000 and shares > 40000 and allowance > 20000 and notional > 5000"),
+
+    # A rate reported as a fraction in one filing and as a percentage in another would
+    # be silently wrong in every ratio built on it, so check the scale filers use.
+    ("the effective tax rate is on a consistent scale",
+     """SELECT count(*) AS n,
+               round(100.0 * count(*) FILTER (WHERE abs(effective_tax_rate) <= 2)
+                     / count(*), 1) AS pct_as_fraction,
+               round(median(effective_tax_rate), 4) AS median_value
+        FROM marts.adjustment_inputs
+        WHERE basis = 'latest' AND effective_tax_rate IS NOT NULL""",
+     "n > 30000 and pct_as_fraction > 90"),
+
+    ("authorised shares are at least those issued",
+     """SELECT count(*) AS compared,
+               count(*) FILTER (WHERE common_shares_authorised
+                                     < common_shares_issued * 0.999) AS violations
+        FROM marts.adjustment_inputs
+        WHERE basis = 'latest' AND common_shares_authorised > 0
+          AND common_shares_issued > 0""",
+     "compared > 20000 and violations < compared * 0.05"),
+
     ("the two new D1 ladders landed in the adjustment inputs",
      """SELECT count(*) FILTER (WHERE intangible_amort_y1 IS NOT NULL) AS intangible,
                count(*) FILTER (WHERE fin_lease_due_y1 IS NOT NULL)   AS fin_lease,
