@@ -98,6 +98,28 @@ CHECKS: list[tuple[str, str, str]] = [
             GROUP BY 1, 2 HAVING count(DISTINCT report) > 1 LIMIT 100000)""",
      "tag_filings_in_several_reports > 1000"),
 
+    # The classifier used to claim every primary statement for the VIE note, because
+    # "CONSOLIDATED BALANCE SHEETS" contains "consolidat". Statements get statement
+    # types; the VIE note has to be named, not merely mentioned.
+    ("primary statements are classified as statements, not as a note",
+     """SELECT count(*) AS statement_reports,
+               round(100.0 * count(*) FILTER (WHERE note_type LIKE 'statement%')
+                     / count(*), 1) AS pct_typed_as_statement,
+               count(*) FILTER (WHERE note_type = 'consolidation_vie') AS claimed_by_vie
+        FROM ref.note_index WHERE note_category = 'statement'""",
+     "pct_typed_as_statement > 90 and claimed_by_vie == 0"),
+
+    ("the balance sheet is recognisable and carries balance-sheet tags",
+     """SELECT count(*) AS facts,
+               round(100.0 * count(*) FILTER (
+                   WHERE tag IN ('Assets', 'Liabilities', 'StockholdersEquity',
+                                 'AssetsCurrent', 'LiabilitiesCurrent', 'Cash',
+                                 'CashAndCashEquivalentsAtCarryingValue')) / count(*), 1)
+                   AS pct_core_bs_tags
+        FROM marts.facts_by_note
+        WHERE note_type = 'statement_balance_sheet' AND is_latest AND fy = 2023""",
+     "facts > 100000 and pct_core_bs_tags > 2"),
+
     ("note titles collapse to a normalised form",
      """SELECT count(DISTINCT note_title) AS as_written,
                count(DISTINCT note_title_normalised) AS normalised

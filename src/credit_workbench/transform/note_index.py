@@ -41,6 +41,22 @@ TAG_NOTE = f"{LAKE}/parquet/derived/tag_note_map"
 # pattern has to win, so debt is tested before the generic "financial instruments".
 NOTE_TYPE_SQL = """
     CASE
+      -- Statements first. Their titles read "CONSOLIDATED BALANCE SHEETS", so a bare
+      -- '%consolidat%' test claimed every primary statement for the VIE note - 42 of
+      -- the 150 largest unmodelled tags were homed there, including share counts and
+      -- other assets. A statement is classified as a statement.
+      WHEN menucat = 'C' THEN 'cover'
+      WHEN menucat = 'S' THEN
+        CASE WHEN t LIKE '%balance sheet%' OR t LIKE '%financial position%'
+                                                    THEN 'statement_balance_sheet'
+             WHEN t LIKE '%cash flow%'              THEN 'statement_cash_flows'
+             WHEN t LIKE '%comprehensive%'          THEN 'statement_comprehensive_income'
+             WHEN t LIKE '%equity%' OR t LIKE '%stockholder%'
+               OR t LIKE '%shareholder%' OR t LIKE '%capital%'
+                                                    THEN 'statement_equity'
+             WHEN t LIKE '%operation%' OR t LIKE '%income%' OR t LIKE '%earnings%'
+               OR t LIKE '%loss%'                   THEN 'statement_operations'
+             ELSE 'statement_other' END
       WHEN t LIKE '%significant accounting polic%' OR t LIKE '%basis of presentation%'
         OR t LIKE '%summary of accounting%'                      THEN 'accounting_policies'
       WHEN t LIKE '%fair value%'                                 THEN 'fair_value'
@@ -73,7 +89,10 @@ NOTE_TYPE_SQL = """
       WHEN t LIKE '%equity%' OR t LIKE '%stockholder%'
         OR t LIKE '%shareholder%' OR t LIKE '%capital stock%'    THEN 'equity'
       WHEN t LIKE '%investment%' OR t LIKE '%securit%'           THEN 'investments'
-      WHEN t LIKE '%variable interest%' OR t LIKE '%consolidat%' THEN 'consolidation_vie'
+      WHEN t LIKE '%variable interest%' OR t LIKE '%vie%'
+        OR t LIKE '%principles of consolidation%' OR t LIKE '%basis of consolidation%'
+        OR t LIKE '%consolidation polic%' OR t LIKE '%deconsolidat%'
+                                                                 THEN 'consolidation_vie'
       WHEN t LIKE '%discontinued%' OR t LIKE '%held for sale%'   THEN 'discontinued_operations'
       WHEN t LIKE '%concentration%' OR t LIKE '%risks and uncertaint%' THEN 'concentrations_risks'
       WHEN t LIKE '%earnings per share%' OR t LIKE '%per share%' THEN 'earnings_per_share'
