@@ -66,10 +66,22 @@ CHECKS: list[tuple[str, str, str]] = [
      "SELECT median(char_len) AS median_chars FROM quali.filing_sections WHERE item = '15'",
      "median_chars < 30000"),
 
-    ("sections are distinct per filing and item",
-     """SELECT count(*) AS rows, count(DISTINCT (adsh, item)) AS distinct_pairs
+    # The natural key includes the filer. One document can be filed by several
+    # co-registrants - a parent and its finance subsidiaries share an accession number -
+    # so the same section legitimately appears once per CIK. The next check counts them.
+    ("sections are distinct per company, filing and item",
+     """SELECT count(*) AS rows,
+               count(DISTINCT (cik, adsh, item)) AS distinct_triples
         FROM quali.filing_sections""",
-     "rows == distinct_pairs"),
+     "rows == distinct_triples"),
+
+    ("repeated sections are co-registrant filings, not duplicates",
+     """SELECT count(*) AS accessions_with_several_filers,
+               (SELECT count(*) - count(DISTINCT (adsh, item))
+                FROM quali.filing_sections) AS extra_rows
+        FROM (SELECT adsh FROM quali.filing_sections
+              GROUP BY adsh HAVING count(DISTINCT cik) > 1)""",
+     "accessions_with_several_filers > 0 and extra_rows > 0"),
 
     ("cybersecurity disclosures appear once the rule took effect",
      """SELECT count(*) AS n FROM quali.filing_sections
@@ -87,7 +99,8 @@ CHECKS: list[tuple[str, str, str]] = [
     ("the agreements contain the clauses that make them agreements",
      """SELECT count(*) AS n,
                round(100.0 * count(*) FILTER (
-                   WHERE lower(text) LIKE '%events of default%') / count(*), 1)
+                   WHERE lower(text) LIKE '%event of default%'
+                      OR lower(text) LIKE '%events of default%') / count(*), 1)
                    AS pct_events_of_default,
                round(100.0 * count(*) FILTER (
                    WHERE lower(text) LIKE '%covenant%') / count(*), 1) AS pct_covenant
