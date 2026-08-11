@@ -85,7 +85,9 @@ INCURRENCE_RE = re.compile(
     r"|on a pro forma basis|pro forma basis|would not exceed|immediately prior to"
     r"|for purposes of (?:determining|calculating)|applicable margin|pricing grid"
     r"|disposition percentage|excess cash flow|permitted acquisition|may (?:make|incur)"
-    r"|is permitted to|so long as)",
+    r"|is permitted to|so long as|net cash proceeds|asset sale|recovery event"
+    r"|shall prepay|mandatory prepayment|for the avoidance of doubt"
+    r"|alternate base rate|applicable rate)",
     re.IGNORECASE)
 
 RATIO_RE = re.compile(
@@ -106,7 +108,22 @@ PERIOD_RE = re.compile(
 SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+(?=[A-Z(])")
 
 
-def direction_for(clause: str, at: int) -> str | None:
+# Explicit floor and ceiling language, which means the same thing either way round.
+FLOOR_RE = re.compile(
+    r"(?:at\s+least|no\s+less\s+than|not\s+less\s+than|not\s+fall\s+below|minimum)",
+    re.IGNORECASE)
+CEILING_RE = re.compile(
+    r"(?:greater\s+than|more\s+than|exceed|in\s+excess\s+of|maximum)",
+    re.IGNORECASE)
+# Bare "less than" means opposite things depending on the obligation it sits under.
+BARE_LESS_RE = re.compile(r"(?<!not )(?<!no )less\s+than", re.IGNORECASE)
+NEGATIVE_OBLIGATION_RE = re.compile(
+    r"(?:shall|will)\s+not\s+(?:be permitted to\s+)?"
+    r"(?:permit|suffer or permit|allow|cause)|^permit\b|\bpermit the\b",
+    re.IGNORECASE)
+
+
+def direction_for(clause: str, at: int, negative_obligation: bool) -> str | None:
     """The comparison closest before a level, which is the one that governs it.
 
     Taking whichever pattern matched first anywhere in the clause left 630 leverage
@@ -119,11 +136,18 @@ def direction_for(clause: str, at: int) -> str | None:
     # rewritten before either pattern sees it.
     window = re.sub(r"equal\s+to\s+or\s+greater\s+than", "at least", window,
                     flags=re.IGNORECASE)
-    last_min = max((m.end() for m in MIN_RE.finditer(window)), default=-1)
-    last_max = max((m.end() for m in MAX_RE.finditer(window)), default=-1)
-    if last_min < 0 and last_max < 0:
+
+    last_floor = max((m.end() for m in FLOOR_RE.finditer(window)), default=-1)
+    last_ceiling = max((m.end() for m in CEILING_RE.finditer(window)), default=-1)
+    # "Maintain a Leverage Ratio of less than 3.00" is a ceiling; "shall not permit the
+    # Ratio to be less than 3.00" is a floor. Identical words, opposite meaning, so the
+    # polarity of the obligation settles it.
+    last_bare = max((m.end() for m in BARE_LESS_RE.finditer(window)), default=-1)
+    if last_bare > max(last_floor, last_ceiling):
+        return "min" if negative_obligation else "max"
+    if last_floor < 0 and last_ceiling < 0:
         return None
-    return "min" if last_min > last_max else "max"
+    return "min" if last_floor > last_ceiling else "max"
 
 
 def covenant_clauses(para: str) -> list[tuple[str, str]]:
@@ -180,19 +204,20 @@ def extract(text: str) -> list[dict]:
         # Closeness to a financial covenant heading is corroboration, not the test.
         nearest = (min((abs(at - h) for h in heading_positions), default=10 ** 9)
                    if at >= 0 else 10 ** 9)
+        negative = bool(NEGATIVE_OBLIGATION_RE.search(para))
 
         for ctype, clause in covenant_clauses(para):
             # (level, direction) pairs: each level takes the comparison governing it.
             found: list[tuple[str, str]] = []
             unit = "ratio"
             for m in RATIO_RE.finditer(clause):
-                d = direction_for(clause, m.start())
+                d = direction_for(clause, m.start(), negative)
                 if d:
                     found.append((m.group(1), d))
             if not found and ctype in ("net_worth", "minimum_liquidity",
                                        "minimum_ebitda"):
                 for m in MONEY_RE.finditer(clause):
-                    d = direction_for(clause, m.start())
+                    d = direction_for(clause, m.start(), negative)
                     if not d:
                         continue
                     amount = float(m.group(1).replace(",", ""))
@@ -221,6 +246,7 @@ def extract(text: str) -> list[dict]:
                     "is_schedule": len(set(levels)) > 1,
                     "applies_from": periods[i] if i < len(periods) else None,
                     "near_covenant_heading": nearest < 4000,
+                    "confidence": "high" if nearest < 4000 else "low",
                     "chars_from_heading": min(nearest, 10 ** 6),
                     "sentence": para[:600],
                 })
@@ -265,7 +291,8 @@ def build(sample: int = 0) -> None:
                             row["covenant_type"], row["direction"], row["level"],
                             row["unit"], row["level_index"], row["is_schedule"],
                             row["applies_from"], row["near_covenant_heading"],
-                            row["chars_from_heading"], row["sentence"]))
+                            row["confidence"], row["chars_from_heading"],
+                            row["sentence"]))
         processed += len(batch)
         if offset % 2500 == 0:
             print(f"  {processed:,}/{total:,} agreements, {len(out):,} covenant rows")
@@ -278,9 +305,9 @@ def build(sample: int = 0) -> None:
         exhibit_number VARCHAR, doc_kind VARCHAR, covenant_type VARCHAR,
         direction VARCHAR, level DOUBLE, unit VARCHAR, level_index INTEGER,
         is_schedule BOOLEAN, applies_from VARCHAR, near_covenant_heading BOOLEAN,
-        chars_from_heading BIGINT, sentence VARCHAR)""")
+        confidence VARCHAR, chars_from_heading BIGINT, sentence VARCHAR)""")
     con.executemany(
-        "INSERT INTO terms VALUES (" + ", ".join("?" * 16) + ")", out)
+        "INSERT INTO terms VALUES (" + ", ".join("?" * 17) + ")", out)
     con.execute(f"""
         COPY (SELECT *, CAST(substr(filing_date, 1, 4) AS INTEGER) AS filing_year
               FROM terms)
@@ -312,7 +339,7 @@ def register() -> None:
                count(*) AS levels_in_schedule,
                any_value(sentence) AS evidence
         FROM marts.covenant_terms
-        WHERE near_covenant_heading
+        WHERE confidence = 'high'
         GROUP BY cik, covenant_type, direction, filing_date, adsh
         QUALIFY row_number() OVER (
             PARTITION BY cik, covenant_type ORDER BY filing_date DESC) = 1""")

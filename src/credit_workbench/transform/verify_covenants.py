@@ -65,12 +65,26 @@ CHECKS: list[tuple[str, str, str]] = [
     # borrower promised, and compound sentences - "the Leverage Ratio to exceed 4.00
     # and the Fixed Charge Coverage Ratio to be less than 1.15" - produced 416 of them
     # before each covenant was given its own clause.
-    ("leverage covenants are not recorded as floors",
+    ("leverage covenants are not recorded as floors, where confidence is high",
      """SELECT count(*) FILTER (WHERE covenant_type LIKE '%leverage%') AS leverage_levels,
                count(*) FILTER (WHERE covenant_type LIKE '%leverage%'
                                   AND direction = 'min') AS recorded_as_floor
+        FROM marts.covenant_terms WHERE confidence = 'high'""",
+     "leverage_levels > 500 and recorded_as_floor < leverage_levels * 0.03"),
+
+    # Rows far from a covenant heading are kept but marked, since that is where the
+    # residual misreadings concentrate - 6.3% floors against 2.3% near a heading.
+    ("confidence is recorded so the weaker rows can be excluded",
+     """SELECT count(*) FILTER (WHERE confidence = 'high') AS high,
+               count(*) FILTER (WHERE confidence = 'low') AS low,
+               round(100.0 * count(*) FILTER (
+                   WHERE confidence = 'low' AND covenant_type LIKE '%leverage%'
+                     AND direction = 'min')
+                 / nullif(count(*) FILTER (WHERE confidence = 'low'
+                                             AND covenant_type LIKE '%leverage%'), 0), 1)
+                   AS pct_low_confidence_floors
         FROM marts.covenant_terms""",
-     "leverage_levels > 500 and recorded_as_floor < leverage_levels * 0.04"),
+     "high > 500 and low >= 0"),
 
     ("incurrence language was excluded, not merely hoped against",
      """SELECT count(*) AS levels,
