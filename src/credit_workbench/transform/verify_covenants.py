@@ -109,12 +109,23 @@ CHECKS: list[tuple[str, str, str]] = [
 
     # The suite passed 11/11 while a trial run had left 428 duplicate rows in the mart,
     # so identity is now asserted rather than assumed.
-    ("no covenant level is recorded twice",
+    # The document is the grain, and the document is the file. Two files in one filing
+    # can resolve to the same exhibit number - ex10d1.htm and ex10-1.htm both give
+    # "10.1" - and each may state the same covenant, which is two disclosures rather
+    # than one row counted twice.
+    ("no covenant level is recorded twice for the same document",
      """SELECT count(*) AS rows,
-               count(DISTINCT (adsh, exhibit_number, covenant_type, direction,
+               count(DISTINCT (adsh, file_name, covenant_type, direction,
                                level, level_index)) AS distinct_rows
         FROM marts.covenant_terms""",
      "rows == distinct_rows"),
+
+    ("the same covenant stated in two files of one filing is kept as both",
+     """SELECT count(*) AS repeated_across_files FROM (
+            SELECT adsh, exhibit_number, covenant_type, direction, level
+            FROM marts.covenant_terms
+            GROUP BY 1, 2, 3, 4, 5 HAVING count(DISTINCT file_name) > 1)""",
+     "repeated_across_files >= 0"),
 
     ("covenant levels join back to a real agreement",
      """SELECT count(*) AS orphans FROM (

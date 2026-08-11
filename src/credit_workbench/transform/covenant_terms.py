@@ -277,7 +277,7 @@ def connect() -> duckdb.DuckDBPyConnection:
 
 COLUMNS = """
         cik VARCHAR, adsh VARCHAR, form VARCHAR, filing_date VARCHAR,
-        exhibit_number VARCHAR, doc_kind VARCHAR, covenant_type VARCHAR,
+        exhibit_number VARCHAR, file_name VARCHAR, doc_kind VARCHAR, covenant_type VARCHAR,
         direction VARCHAR, level DOUBLE, unit VARCHAR, level_index INTEGER,
         is_schedule BOOLEAN, applies_from VARCHAR, near_covenant_heading BOOLEAN,
         confidence VARCHAR, chars_from_heading BIGINT, sentence VARCHAR"""
@@ -361,8 +361,8 @@ def build(sample: int = 0, rebuild_all: bool = False, reset: bool = False) -> No
     for lo in range(0, total, batch_size):
         batch = con.execute(f"""
             SELECT DISTINCT ON (e.adsh, e.file_name)
-                   e.cik, e.adsh, e.form, e.filing_date, e.exhibit_number, e.doc_kind,
-                   e.text
+                   e.cik, e.adsh, e.form, e.filing_date, e.exhibit_number, e.file_name,
+                   e.doc_kind, e.text
             FROM read_parquet('{EXHIBITS}/*/*.parquet', hive_partitioning = true,
                               union_by_name = true) e
             JOIN keys_n k ON k.adsh = e.adsh AND k.file_name = e.file_name
@@ -371,9 +371,9 @@ def build(sample: int = 0, rebuild_all: bool = False, reset: bool = False) -> No
         """).fetchall()
 
         rows = []
-        for cik, adsh, form, filed, exhibit, kind, text in batch:
+        for cik, adsh, form, filed, exhibit, fname, kind, text in batch:
             for row in extract(text or ""):
-                rows.append((str(cik), str(adsh), form, str(filed), exhibit, kind,
+                rows.append((str(cik), str(adsh), form, str(filed), exhibit, fname, kind,
                              row["covenant_type"], row["direction"], row["level"],
                              row["unit"], row["level_index"], row["is_schedule"],
                              row["applies_from"], row["near_covenant_heading"],
@@ -381,7 +381,7 @@ def build(sample: int = 0, rebuild_all: bool = False, reset: bool = False) -> No
                              row["sentence"]))
         if rows:
             con.executemany(
-                "INSERT INTO terms VALUES (" + ", ".join("?" * 17) + ")", rows)
+                "INSERT INTO terms VALUES (" + ", ".join("?" * 18) + ")", rows)
             written += len(rows)
         del batch, rows
         if lo % 4000 == 0:
