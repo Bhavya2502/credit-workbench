@@ -59,7 +59,18 @@ CHECKS: list[tuple[str, str, str]] = [
                  / nullif(count(*) FILTER (WHERE covenant_type LIKE '%coverage%'), 0), 1)
                    AS pct_coverage_min
         FROM marts.covenant_terms WHERE near_covenant_heading""",
-     "pct_leverage_max > 75 and pct_coverage_min > 70"),
+     "pct_leverage_max > 92 and pct_coverage_min > 90"),
+
+    # A leverage covenant is a ceiling. Recording one as a floor inverts what the
+    # borrower promised, and compound sentences - "the Leverage Ratio to exceed 4.00
+    # and the Fixed Charge Coverage Ratio to be less than 1.15" - produced 416 of them
+    # before each covenant was given its own clause.
+    ("leverage covenants are not recorded as floors",
+     """SELECT count(*) FILTER (WHERE covenant_type LIKE '%leverage%') AS leverage_levels,
+               count(*) FILTER (WHERE covenant_type LIKE '%leverage%'
+                                  AND direction = 'min') AS recorded_as_floor
+        FROM marts.covenant_terms""",
+     "leverage_levels > 500 and recorded_as_floor < leverage_levels * 0.04"),
 
     ("incurrence language was excluded, not merely hoped against",
      """SELECT count(*) AS levels,

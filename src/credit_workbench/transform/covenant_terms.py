@@ -106,11 +106,33 @@ PERIOD_RE = re.compile(
 SENTENCE_SPLIT = re.compile(r"(?<=[.;])\s+(?=[A-Z(])")
 
 
-def covenant_type(sentence: str) -> str | None:
-    for name, rx in COVENANT_RES:
-        if rx.search(sentence):
-            return name
-    return None
+def covenant_clauses(para: str) -> list[tuple[str, str]]:
+    """Split a sentence into one clause per covenant it names.
+
+    A single sentence often carries two covenants - "shall not permit the Leverage
+    Ratio to exceed 4.00 to 1.00 and the Fixed Charge Coverage Ratio to be less than
+    1.15 to 1.00". Reading direction from the whole sentence gave both covenants the
+    same direction and attributed both to whichever name came first, which is how 416
+    leverage covenants ended up recorded as minima - the opposite of what a leverage
+    covenant means.
+
+    Each clause runs from its covenant name to the next one, so the comparison and the
+    level that follow belong to it.
+    """
+    spans: list[tuple[int, int, str]] = []
+    for name, rx in COVENANT_RES:        # ordered most specific first
+        for m in rx.finditer(para):
+            if any(s < m.end() and m.start() < e for s, e, _ in spans):
+                continue                  # already claimed by a more specific name
+            spans.append((m.start(), m.end(), name))
+    if not spans:
+        return []
+    spans.sort()
+    out = []
+    for i, (start, _end, name) in enumerate(spans):
+        stop = spans[i + 1][0] if i + 1 < len(spans) else len(para)
+        out.append((name, para[start:stop]))
+    return out
 
 
 def extract(text: str) -> list[dict]:
@@ -132,50 +154,50 @@ def extract(text: str) -> list[dict]:
             continue
         if not OBLIGATION_RE.search(para):
             continue
-        ctype = covenant_type(para)
-        if not ctype:
-            continue
         if INCURRENCE_RE.search(para):
-            continue
-
-        if MIN_RE.search(para):
-            direction = "min"
-        elif MAX_RE.search(para):
-            direction = "max"
-        else:
-            continue                      # no comparison stated: not a usable level
-
-        levels = [m.group(1) for m in RATIO_RE.finditer(para)]
-        unit = "ratio"
-        if not levels and ctype in ("net_worth", "minimum_liquidity", "minimum_ebitda"):
-            for m in MONEY_RE.finditer(para):
-                amount = float(m.group(1).replace(",", ""))
-                scale = (m.group(2) or "").lower()
-                amount *= 1e6 if scale in ("million", "mm") else (
-                    1e9 if scale in ("billion", "bn") else 1)
-                levels.append(str(amount))
-            unit = "usd"
-        if not levels:
             continue
 
         # Closeness to a financial covenant heading is corroboration, not the test.
         nearest = (min((abs(at - h) for h in heading_positions), default=10 ** 9)
                    if at >= 0 else 10 ** 9)
-        periods = [m.group(1) for m in PERIOD_RE.finditer(para)]
 
-        for i, level in enumerate(dict.fromkeys(levels)):
-            rows.append({
-                "covenant_type": ctype,
-                "direction": direction,
-                "level": float(level),
-                "unit": unit,
-                "level_index": i,
-                "is_schedule": len(set(levels)) > 1,
-                "applies_from": periods[i] if i < len(periods) else None,
-                "near_covenant_heading": nearest < 4000,
-                "chars_from_heading": min(nearest, 10 ** 6),
-                "sentence": para[:600],
-            })
+        for ctype, clause in covenant_clauses(para):
+            if MIN_RE.search(clause):
+                direction = "min"
+            elif MAX_RE.search(clause):
+                direction = "max"
+            else:
+                continue                  # no comparison stated: not a usable level
+
+            levels = [m.group(1) for m in RATIO_RE.finditer(clause)]
+            unit = "ratio"
+            if not levels and ctype in ("net_worth", "minimum_liquidity",
+                                        "minimum_ebitda"):
+                for m in MONEY_RE.finditer(clause):
+                    amount = float(m.group(1).replace(",", ""))
+                    scale = (m.group(2) or "").lower()
+                    amount *= 1e6 if scale in ("million", "mm") else (
+                        1e9 if scale in ("billion", "bn") else 1)
+                    levels.append(str(amount))
+                unit = "usd"
+            if not levels:
+                continue
+
+            periods = [m.group(1) for m in PERIOD_RE.finditer(clause)]
+
+            for i, level in enumerate(dict.fromkeys(levels)):
+                rows.append({
+                    "covenant_type": ctype,
+                    "direction": direction,
+                    "level": float(level),
+                    "unit": unit,
+                    "level_index": i,
+                    "is_schedule": len(set(levels)) > 1,
+                    "applies_from": periods[i] if i < len(periods) else None,
+                    "near_covenant_heading": nearest < 4000,
+                    "chars_from_heading": min(nearest, 10 ** 6),
+                    "sentence": para[:600],
+                })
     return rows
 
 
