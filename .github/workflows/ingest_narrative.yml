@@ -1,0 +1,79 @@
+name: ingest-narrative
+# G1: 10-K narrative sections, and the exhibits that carry covenant terms.
+on:
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: "sections_dry | sections | exhibits_dry | exhibits | register"
+        required: true
+        default: sections_dry
+        type: choice
+        options: [sections_dry, sections, exhibits_dry, exhibits, register]
+      years:
+        description: "filing years, e.g. 2019-2026"
+        required: true
+        default: "2019-2026"
+        type: string
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+
+jobs:
+  sections_dry:
+    # Validate the splitter on real documents before committing hours of fetching.
+    if: inputs.parts == 'sections_dry'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.ingest.filing_sections --years ${{ inputs.years }} --limit 60 --dry-run
+
+  sections:
+    # One job fetching asynchronously at just under SEC's ten-per-second limit. Cheaper
+    # in runner minutes than parallel jobs that each have to throttle themselves down.
+    if: inputs.parts == 'sections'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.ingest.filing_sections --years ${{ inputs.years }}
+
+  exhibits_dry:
+    if: inputs.parts == 'exhibits_dry'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.ingest.filing_exhibits --years ${{ inputs.years }} --limit 40 --dry-run
+
+  exhibits:
+    if: inputs.parts == 'exhibits'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.ingest.filing_exhibits --years ${{ inputs.years }}
+
+  register:
+    if: inputs.parts == 'register'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.ingest.narrative_register
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_narrative
