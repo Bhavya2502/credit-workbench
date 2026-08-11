@@ -1,0 +1,58 @@
+name: transform-covenants
+# Financial covenant levels, extracted from the credit agreements themselves.
+on:
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: "sample | build | register"
+        required: true
+        default: sample
+        type: choice
+        options: [sample, build, register]
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+jobs:
+  sample:
+    # Read a few hundred agreements and report what came out, before committing the
+    # whole corpus to a parser whose failures look like plausible covenant levels.
+    if: inputs.parts == 'sample'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.covenant_terms --sample 600
+      - run: uv run python -m credit_workbench.transform.covenant_terms --register
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_covenants
+
+  build:
+    if: inputs.parts == 'build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.covenant_terms
+      - run: uv run python -m credit_workbench.transform.covenant_terms --register
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_covenants
+
+  register:
+    if: inputs.parts == 'register'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.covenant_terms --register
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_covenants
