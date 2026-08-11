@@ -115,14 +115,31 @@ def main() -> None:
         FROM ref.filing_index WHERE form LIKE '10-Q%'""").fetchall():
         print(f"  {label:<52} {n:>10,}")
 
+    print("\n### 3b. Exhibit sweep sized by year (8-K item 1.01)")
+    for year, n in con.execute("""
+        SELECT year(TRY_CAST(filing_date AS DATE)) AS y, count(*) AS n
+        FROM ref.filing_index WHERE form LIKE '8-K%' AND items LIKE '%1.01%'
+        GROUP BY 1 HAVING y >= 2015 ORDER BY 1""").fetchall():
+        print(f"  {year}  {n:>7,}")
+
     # ---------------------------------------------------------------- live fetches
+    # A deterministic pick, not USING SAMPLE: that returned nothing here because the
+    # sample is drawn from the scan before the filter has cut it down.
     samples = con.execute("""
         SELECT cik, accession_number, primary_document, filing_date,
                TRY_CAST(size AS BIGINT) AS size
         FROM ref.filing_index
-        WHERE form = '10-K' AND primary_document LIKE '%.htm'
-          AND filing_date >= '2023-01-01'
-        USING SAMPLE 4 ROWS""").fetchall()
+        WHERE form = '10-K' AND lower(primary_document) LIKE '%.htm%'
+          AND TRY_CAST(filing_date AS DATE) >= DATE '2024-01-01'
+        ORDER BY hash(accession_number) LIMIT 4""").fetchall()
+    print(f"\n(sample documents selected: {len(samples)})")
+    if not samples:
+        print("  none - showing raw column formats to diagnose:")
+        for r in con.execute("""SELECT form, filing_date, primary_document
+                                FROM ref.filing_index WHERE form = '10-K'
+                                LIMIT 5""").fetchall():
+            print(f"    {r}")
+        return
 
     headers = {"User-Agent": sec_user_agent(), "Accept-Encoding": "gzip, deflate"}
     with httpx.Client(headers=headers, timeout=120, follow_redirects=True) as client:
@@ -159,19 +176,30 @@ def main() -> None:
                       f"largest following block {max(gaps)/1000:.0f}k chars "
                       f"at occurrence #{gaps.index(max(gaps)) + 1}")
 
-        # What does a filing actually contain, document by document?
-        cik, adsh = samples[0][0], samples[0][1]
-        nodash = str(adsh).replace("-", "")
-        print(f"\n### 5. Documents inside one filing (index.json), cik={cik}")
-        try:
-            resp = fetch(client, f"{ARCHIVES}/{int(cik)}/{nodash}/index.json")
-            items = resp.json()["directory"]["item"]
-            print(f"  {len(items)} documents")
-            for it in sorted(items, key=lambda d: -int(d.get("size") or 0))[:18]:
-                print(f"    {str(it.get('type') or '-'):<12} "
-                      f"{int(it.get('size') or 0)/1000:>9,.0f} KB  {it['name'][:52]}")
-        except Exception as exc:  # noqa: BLE001
-            print(f"  FAILED: {exc}")
+        # What does a filing actually contain, document by document? Look at both a
+        # 10-K, which carries the annual exhibit index, and an 8-K item 1.01, which is
+        # where a credit agreement lands when it is signed.
+        probes = [("10-K", samples[0][0], samples[0][1])]
+        agreement = con.execute("""
+            SELECT cik, accession_number FROM ref.filing_index
+            WHERE form LIKE '8-K%' AND items LIKE '%1.01%'
+              AND TRY_CAST(filing_date AS DATE) >= DATE '2024-01-01'
+            ORDER BY hash(accession_number) LIMIT 1""").fetchall()
+        if agreement:
+            probes.append(("8-K item 1.01", agreement[0][0], agreement[0][1]))
+
+        for label, cik, adsh in probes:
+            nodash = str(adsh).replace("-", "")
+            print(f"\n### 5. Documents inside one {label} filing, cik={cik}")
+            try:
+                resp = fetch(client, f"{ARCHIVES}/{int(cik)}/{nodash}/index.json")
+                items = resp.json()["directory"]["item"]
+                print(f"  {len(items)} documents")
+                for it in sorted(items, key=lambda d: -int(d.get("size") or 0))[:16]:
+                    print(f"    {str(it.get('type') or '-'):<14} "
+                          f"{int(it.get('size') or 0)/1000:>9,.0f} KB  {it['name'][:50]}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  FAILED: {exc}")
 
 
 if __name__ == "__main__":
