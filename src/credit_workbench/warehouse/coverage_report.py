@@ -85,7 +85,24 @@ Q: list[tuple[str, str]] = [
                (SELECT count(DISTINCT adsh) FROM quali.note_signals) AS filings_scanned,
                (SELECT count(*) FROM ref.signal_definitions)       AS signals_defined"""),
 
-    ("7. The frontier — biggest tags not yet modelled anywhere", """
+    # Reachable is not the same as covered. A fact was findable long before it could be
+    # found under the note it belongs to, and this is the measure of that second thing.
+    ("7. Notes — can a fact be found under the note it was presented in?", """
+        SELECT (SELECT count(*) FROM ref.note_index)     AS reports_titled,
+               (SELECT count(*) FROM ref.tag_note_map)   AS tag_to_note_links,
+               (SELECT count(DISTINCT note_type) FROM ref.note_index) AS note_types,
+               (SELECT count(DISTINCT adsh) FROM ref.note_index) AS filings"""),
+
+    ("7b. What the notes hold, by type", """
+        SELECT note_type,
+               sum(reports) FILTER (WHERE note_category = 'note') AS note_text,
+               sum(reports) FILTER (WHERE note_category = 'note_detail') AS schedules,
+               sum(filings) AS filings
+        FROM ref.note_catalog
+        WHERE note_category IN ('note', 'note_detail')
+        GROUP BY 1 ORDER BY filings DESC LIMIT 18"""),
+
+    ("8. The frontier — biggest tags not yet modelled anywhere", """
         SELECT tag, coalesce(label, '(company extension)') AS label,
                greatest(consolidated_filings, dimensioned_filings) AS filings,
                CASE WHEN dimensioned_facts > consolidated_facts THEN 'schedule'
