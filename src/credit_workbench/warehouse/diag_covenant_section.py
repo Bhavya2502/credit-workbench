@@ -28,6 +28,15 @@ HEADING_RE = re.compile(
     r"|financial performance covenants?|covenant compliance)\b[^\n]{0,60}$",
     re.IGNORECASE | re.MULTILINE)
 
+# Every numbered heading in the agreement. The covenant section runs from its own
+# heading to the NEXT heading of any kind - measuring to the next *financial covenant*
+# heading instead let a table-of-contents entry run to the end of the document, which
+# is the same trap the 10-K splitter hit and the same rule that fixes it.
+SECTION_RE = re.compile(
+    r"^[^\S
+]*(?:section\s+)?(?:\d{1,2}\.\d{1,3}|article\s+[IVXLC]+|\d{1,2}\.\s)",
+    re.IGNORECASE | re.MULTILINE)
+
 RATIO_RE = re.compile(
     r"(\d{1,2}(?:\.\d{1,3})?)\s*(?::|\s+to\s+|\s*/\s*)\s*1(?:\.0{1,3})?\b")
 
@@ -72,12 +81,10 @@ def main() -> None:
     stats = []
     for adsh, cik, text in docs:
         hits = list(HEADING_RE.finditer(text))
-        # The covenant section is the heading followed by the most substantive text
-        # before the next heading; a table of contents entry has almost none.
+        boundaries = [m.start() for m in SECTION_RE.finditer(text)]
         best, best_len = None, 0
         for m in hits:
-            nxt = min((h.start() for h in hits if h.start() > m.start()),
-                      default=len(text))
+            nxt = min((b for b in boundaries if b > m.start() + 20), default=len(text))
             span = nxt - m.start()
             if span > best_len:
                 best, best_len = m, span
