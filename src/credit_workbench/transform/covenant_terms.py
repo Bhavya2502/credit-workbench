@@ -40,6 +40,10 @@ from credit_workbench.common.config import R2, motherduck_token
 LAKE = "r2://credit-workbench-raw"
 EXHIBITS = f"{LAKE}/parquet/sec/narrative/exhibits"
 OUT = f"{LAKE}/parquet/derived/covenant_terms"
+# A trial run writes here instead, so it can never add rows to the mart an analyst
+# reads. It did once: a 600-agreement sample re-read agreements already extracted and,
+# because incremental passes write under a per-run filename, left 428 duplicates behind.
+OUT_SAMPLE = f"{LAKE}/parquet/derived/covenant_terms_sample"
 
 COVENANT_TYPES = [
     ("first_lien_leverage", r"first[\s-]lien\s+(?:net\s+)?leverage ratio"),
@@ -279,7 +283,26 @@ COLUMNS = """
         confidence VARCHAR, chars_from_heading BIGINT, sentence VARCHAR"""
 
 
-def build(sample: int = 0, rebuild_all: bool = False) -> None:
+def clear_output(con: duckdb.DuckDBPyConnection, prefix: str) -> None:
+    """Delete an output prefix so a rebuild replaces rather than accumulates.
+
+    DuckDB's OVERWRITE_OR_IGNORE permits writing into a populated directory; it does not
+    empty it. Without this, every rebuild layers another copy on top of the last.
+    """
+    from credit_workbench.common import r2 as r2util
+    cfg = R2.from_env()
+    s3 = r2util.client(cfg)
+    key_prefix = prefix.replace(f"r2://{cfg.bucket}/", "")
+    paginator = s3.get_paginator("list_objects_v2")
+    keys = [{"Key": o["Key"]}
+            for page in paginator.paginate(Bucket=cfg.bucket, Prefix=key_prefix)
+            for o in page.get("Contents", [])]
+    for i in range(0, len(keys), 1000):
+        s3.delete_objects(Bucket=cfg.bucket, Delete={"Objects": keys[i:i + 1000]})
+    print(f"cleared {len(keys):,} existing objects under {key_prefix}")
+
+
+def build(sample: int = 0, rebuild_all: bool = False, reset: bool = False) -> None:
     """Read the agreements a batch at a time, writing each batch out before the next.
 
     An earlier version pulled every agreement's text into one table and accumulated all
@@ -289,6 +312,9 @@ def build(sample: int = 0, rebuild_all: bool = False) -> None:
     next is read.
     """
     con = connect()
+    out = OUT_SAMPLE if sample else OUT
+    if reset or sample:
+        clear_output(con, out)
 
     # Only read agreements that have not been read before. The mart already covers
     # 2019-2026, so a rerun after a backfill should cost the new agreements and not the
@@ -297,7 +323,7 @@ def build(sample: int = 0, rebuild_all: bool = False) -> None:
     if not sample and not rebuild_all:
         try:
             already = {r[0] for r in con.execute(
-                f"SELECT DISTINCT adsh FROM read_parquet('{OUT}/*/*.parquet', "
+                f"SELECT DISTINCT adsh FROM read_parquet('{out}/*/*.parquet', "
                 f"hive_partitioning = true, union_by_name = true)").fetchall()}
             print(f"{len(already):,} agreements already extracted, and will be skipped")
         except duckdb.IOException:
@@ -364,7 +390,7 @@ def build(sample: int = 0, rebuild_all: bool = False) -> None:
     con.execute(f"""
         COPY (SELECT *, CAST(substr(filing_date, 1, 4) AS INTEGER) AS filing_year
               FROM terms)
-        TO '{OUT}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (filing_year),
+        TO '{out}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (filing_year),
                     OVERWRITE_OR_IGNORE, FILENAME_PATTERN '{stamp}_{{i}}')""")
     print(f"DONE: {written:,} covenant levels from {total:,} agreements")
 
@@ -414,11 +440,13 @@ def main() -> None:
     ap.add_argument("--register", action="store_true")
     ap.add_argument("--rebuild-all", action="store_true",
                     help="re-read every agreement instead of only the new ones")
+    ap.add_argument("--reset", action="store_true",
+                    help="clear the output prefix first, so a rebuild replaces it")
     args = ap.parse_args()
     if args.register:
         register()
     else:
-        build(args.sample, args.rebuild_all)
+        build(args.sample, args.rebuild_all, args.reset)
 
 
 if __name__ == "__main__":

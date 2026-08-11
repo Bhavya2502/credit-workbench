@@ -107,6 +107,15 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.covenant_headline""",
      "rows == pairs and rows > 50"),
 
+    # The suite passed 11/11 while a trial run had left 428 duplicate rows in the mart,
+    # so identity is now asserted rather than assumed.
+    ("no covenant level is recorded twice",
+     """SELECT count(*) AS rows,
+               count(DISTINCT (adsh, exhibit_number, covenant_type, direction,
+                               level, level_index)) AS distinct_rows
+        FROM marts.covenant_terms""",
+     "rows == distinct_rows"),
+
     ("covenant levels join back to a real agreement",
      """SELECT count(*) AS orphans FROM (
             SELECT t.adsh FROM marts.covenant_terms t
