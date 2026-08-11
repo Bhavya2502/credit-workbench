@@ -175,20 +175,31 @@ def main() -> None:
     ap.add_argument("--years", required=True)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--include-all-agreements", action="store_true",
+                    help="widen from item 2.03 to any material agreement (1.01)")
     args = ap.parse_args()
     lo, _, hi = args.years.partition("-")
     lo, hi = int(lo), int(hi or lo)
 
     con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
+    # Item 2.03 is "creation of a direct financial obligation" - the debt-specific code.
+    # Item 1.01 alone is any material agreement at all, and a sweep of it turned up
+    # mostly SPAC trust and escrow agreements. Requiring 2.03 targets borrowings; 1.01
+    # is kept only alongside it, since a credit agreement is usually reported as both.
+    where = ("form LIKE '8-K%' AND items LIKE '%2.03%'"
+             if not args.include_all_agreements else
+             "form LIKE '8-K%' AND (items LIKE '%2.03%' OR items LIKE '%1.01%')")
+    # Hash order, not filing order: taking the earliest filings of a year gave a
+    # January sample that was almost entirely blank-cheque companies.
+    order = "hash(accession_number)" if args.limit else "filed, accession_number"
     filings = con.execute(f"""
         SELECT cik, accession_number, form, TRY_CAST(filing_date AS DATE) AS filed, items
         FROM ref.filing_index
-        WHERE form LIKE '8-K%' AND items LIKE '%1.01%'
+        WHERE {where}
           AND year(TRY_CAST(filing_date AS DATE)) BETWEEN {lo} AND {hi}
-        ORDER BY filed, accession_number
+        ORDER BY {order}
         {f'LIMIT {args.limit}' if args.limit else ''}""").fetchall()
-    print(f"{len(filings):,} filings reporting a material definitive agreement, "
-          f"{args.years}")
+    print(f"{len(filings):,} filings reporting a financial obligation, {args.years}")
     if not filings:
         return
 
