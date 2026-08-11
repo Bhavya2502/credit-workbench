@@ -117,8 +117,17 @@ def extract(text: str) -> list[dict]:
     """Covenant levels stated as standing obligations, one row per level."""
     heading_positions = [m.start() for m in HEADING_RE.finditer(text)]
     rows: list[dict] = []
+    cursor = 0
 
-    for para in SENTENCE_SPLIT.split(text):
+    for raw in SENTENCE_SPLIT.split(text):
+        # Position first, while the raw text still matches the document, then collapse
+        # the whitespace. Agreements wrap mid-phrase, so "after giving\neffect" and
+        # "greater\nthan" are common - matching on the raw text let incurrence language
+        # through the filter and lost covenants whose comparison straddled a line break.
+        at = text.find(raw[:120], cursor) if raw[:120] else -1
+        if at >= 0:
+            cursor = at
+        para = re.sub(r"\s+", " ", raw).strip()
         if len(para) > 3000 or len(para) < 40:
             continue
         if not OBLIGATION_RE.search(para):
@@ -150,9 +159,8 @@ def extract(text: str) -> list[dict]:
             continue
 
         # Closeness to a financial covenant heading is corroboration, not the test.
-        nearest = min((abs(para_pos - h) for h in heading_positions
-                       for para_pos in [text.find(para[:80])] if para_pos >= 0),
-                      default=10 ** 9)
+        nearest = (min((abs(at - h) for h in heading_positions), default=10 ** 9)
+                   if at >= 0 else 10 ** 9)
         periods = [m.group(1) for m in PERIOD_RE.finditer(para)]
 
         for i, level in enumerate(dict.fromkeys(levels)):
@@ -166,7 +174,7 @@ def extract(text: str) -> list[dict]:
                 "applies_from": periods[i] if i < len(periods) else None,
                 "near_covenant_heading": nearest < 4000,
                 "chars_from_heading": min(nearest, 10 ** 6),
-                "sentence": re.sub(r"\s+", " ", para)[:600],
+                "sentence": para[:600],
             })
     return rows
 
