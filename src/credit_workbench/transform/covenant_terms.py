@@ -334,17 +334,24 @@ def build(sample: int = 0, rebuild_all: bool = False, reset: bool = False) -> No
     if already:
         con.executemany("INSERT INTO done VALUES (?)", [(a,) for a in already])
 
+    # Keyed on file name, not exhibit number. The number is derived from the file name,
+    # so two files in one filing - ex10d1.htm and ex10-1.htm - both resolve to "10.1";
+    # joining on it fanned out and processed those documents twice, leaving 2,016
+    # duplicate levels in a build that was otherwise clean.
     con.execute(f"""
         CREATE OR REPLACE TABLE keys AS
-        SELECT e.adsh, e.exhibit_number,
-               row_number() OVER (ORDER BY e.adsh, e.exhibit_number) AS rn
+        SELECT DISTINCT ON (e.adsh, e.file_name) e.adsh, e.file_name
         FROM read_parquet('{EXHIBITS}/*/*.parquet', hive_partitioning = true,
                           union_by_name = true) e
         LEFT JOIN done d ON d.adsh = e.adsh
         WHERE e.doc_kind IN ('credit_agreement', 'amendment', 'note_purchase')
           AND d.adsh IS NULL
         {f'ORDER BY hash(e.adsh) LIMIT {sample}' if sample else ''}""")
-    total = con.execute("SELECT count(*) FROM keys").fetchone()[0]
+    con.execute("""
+        CREATE OR REPLACE TABLE keys_n AS
+        SELECT adsh, file_name, row_number() OVER (ORDER BY adsh, file_name) AS rn
+        FROM keys""")
+    total = con.execute("SELECT count(*) FROM keys_n").fetchone()[0]
     print(f"{total:,} agreements to read")
 
     con.execute(f"CREATE OR REPLACE TABLE terms ({COLUMNS})")
@@ -353,12 +360,12 @@ def build(sample: int = 0, rebuild_all: bool = False, reset: bool = False) -> No
 
     for lo in range(0, total, batch_size):
         batch = con.execute(f"""
-            SELECT e.cik, e.adsh, e.form, e.filing_date, e.exhibit_number, e.doc_kind,
+            SELECT DISTINCT ON (e.adsh, e.file_name)
+                   e.cik, e.adsh, e.form, e.filing_date, e.exhibit_number, e.doc_kind,
                    e.text
             FROM read_parquet('{EXHIBITS}/*/*.parquet', hive_partitioning = true,
                               union_by_name = true) e
-            JOIN keys k ON k.adsh = e.adsh
-                       AND k.exhibit_number IS NOT DISTINCT FROM e.exhibit_number
+            JOIN keys_n k ON k.adsh = e.adsh AND k.file_name = e.file_name
             WHERE k.rn > {lo} AND k.rn <= {lo + batch_size}
               AND e.doc_kind IN ('credit_agreement', 'amendment', 'note_purchase')
         """).fetchall()
