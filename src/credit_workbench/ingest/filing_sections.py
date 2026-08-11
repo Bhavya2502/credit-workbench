@@ -72,6 +72,16 @@ ITEM_TITLES = {
     "14": "Principal Accountant Fees and Services",
     "15": "Exhibits and Financial Statement Schedules",
 }
+# The financial statements are often placed after Item 15, so without this the last
+# section runs to the end of the document and swallows the F-pages - content we already
+# hold as XBRL. Treated as a boundary in the same way as Item 8.
+FINANCIALS_RE = re.compile(
+    r"^\s*(report of independent registered public accounting firm"
+    r"|index to (the )?consolidated financial statements"
+    r"|index to financial statements"
+    r"|consolidated balance sheets?\s*$)",
+    re.IGNORECASE | re.MULTILINE)
+
 # Longest first so "1A" is not eaten by "1". Item 8 is matched only as a boundary.
 ITEM_ALTERNATION = "1A|1B|1C|7A|9A|9B|10|11|12|13|14|15|1|2|3|4|5|6|7|8|9"
 ITEM_RE = re.compile(
@@ -126,6 +136,11 @@ def split_sections(text: str) -> dict[str, str]:
     matches = [(m.start(), m.group(1).upper()) for m in ITEM_RE.finditer(text)]
     if not matches:
         return {}
+    # A pseudo-heading so a section cannot run past the start of the F-pages.
+    fin = FINANCIALS_RE.search(text)
+    if fin:
+        matches.append((fin.start(), "__FIN__"))
+        matches.sort()
 
     # The real heading is the occurrence followed by the most text before the next
     # heading of any item. Contents entries are a few tens of characters apart.
@@ -167,7 +182,7 @@ class RateLimiter:
 
 
 async def fetch_one(client: httpx.AsyncClient, limiter: RateLimiter,
-                    sem: asyncio.Semaphore, row: tuple) -> list[list] | None:
+                    sem: asyncio.Semaphore, row: tuple) -> dict | None:
     cik, adsh, doc, form, filed, period = row
     url = f"{ARCHIVES}/{int(cik)}/{str(adsh).replace('-', '')}/{doc}"
     async with sem:
@@ -189,17 +204,19 @@ async def fetch_one(client: httpx.AsyncClient, limiter: RateLimiter,
         if resp.status_code != 200:
             return None
 
-    sections = split_sections(to_text(resp.text))
-    return [[str(cik), str(adsh), form, str(filed), str(period), item,
+    text = to_text(resp.text)
+    sections = split_sections(text)
+    rows = [[str(cik), str(adsh), form, str(filed), str(period), item,
              ITEM_TITLES[item], len(body), body]
             for item, body in sections.items()]
+    return {"adsh": str(adsh), "text": text, "rows": rows}
 
 
 FIELDS = ["cik", "adsh", "form", "filing_date", "period_of_report",
           "item", "item_title", "char_len", "text"]
 
 
-async def run_chunk(rows: list[tuple]) -> list[list]:
+async def run_chunk(rows: list[tuple], keep_text: bool = False) -> list:
     headers = {"User-Agent": sec_user_agent(), "Accept-Encoding": "gzip, deflate"}
     limiter = RateLimiter(REQUESTS_PER_SECOND)
     sem = asyncio.Semaphore(IN_FLIGHT)
@@ -208,7 +225,10 @@ async def run_chunk(rows: list[tuple]) -> list[list]:
                                  follow_redirects=True) as client:
         results = await asyncio.gather(
             *(fetch_one(client, limiter, sem, r) for r in rows))
-    return [row for res in results if res for row in res]
+    docs = [d for d in results if d]
+    if keep_text:
+        return docs
+    return [row for d in docs for row in d["rows"]]
 
 
 def dry_run(filings: list[tuple]) -> None:
@@ -219,7 +239,8 @@ def dry_run(filings: list[tuple]) -> None:
     like the item it claims to be - risk factors that never say "risk", or an MD&A that
     never says "compared", mean the heading matched the contents page.
     """
-    rows = asyncio.run(run_chunk(filings))
+    docs = asyncio.run(run_chunk(filings, keep_text=True))
+    rows = [r for d in docs for r in d["rows"]]
     if not rows:
         print("no sections extracted at all")
         return
@@ -258,6 +279,38 @@ def dry_run(filings: list[tuple]) -> None:
     print("\nShortest sections extracted (mis-hits show up here):")
     for r in worst:
         print(f"  item {r[5]:<3} {r[7]:>6,} chars  {r[1]}  {r[8][:90]!r}")
+
+    # Risk factors were found in well under every filing. Absence is expected for
+    # smaller reporting companies, which are exempt from Item 1A; a parse failure is
+    # not. Separate the two rather than assume the innocent explanation.
+    missing = [d for d in docs if "1A" not in {r[5] for r in d["rows"]}]
+    print(f"\nItem 1A absent in {len(missing)} of {len(docs)} filings - why?")
+    exempt = stub = no_heading = unexplained = 0
+    for d in missing:
+        low = d["text"].lower()
+        heading = re.search(r"^\s*item\s*1a\b", low, re.MULTILINE)
+        if not heading:
+            no_heading += 1
+        elif "smaller reporting company" in low[heading.start():heading.start() + 1200]:
+            exempt += 1
+        elif re.search(r"not (applicable|required)",
+                       low[heading.start():heading.start() + 400]):
+            stub += 1
+        else:
+            unexplained += 1
+            if unexplained <= 3:
+                print(f"    UNEXPLAINED {d['adsh']}: "
+                      f"{d['text'][heading.start():heading.start() + 130]!r}")
+    print(f"  exempt (smaller reporting company)   {exempt}")
+    print(f"  stub ('not applicable' / 'none')     {stub}")
+    print(f"  no Item 1A heading in the document   {no_heading}")
+    print(f"  UNEXPLAINED - would be a parse bug   {unexplained}")
+
+    print("\nItem 15 length (should be an exhibit list, not the F-pages):")
+    fifteen = sorted(r[7] for r in rows if r[5] == "15")
+    if fifteen:
+        print(f"  n={len(fifteen)}  median={fifteen[len(fifteen)//2]:,}  "
+              f"p90={fifteen[int(len(fifteen)*0.9)]:,}  max={fifteen[-1]:,}")
 
 
 def main() -> None:
