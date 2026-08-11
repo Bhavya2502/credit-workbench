@@ -372,13 +372,25 @@ def build(sample: int = 0, rebuild_all: bool = False, reset: bool = False) -> No
 
         rows = []
         for cik, adsh, form, filed, exhibit, fname, kind, text in batch:
+            # An agreement states the same covenant more than once - in the definitions,
+            # in the covenant section, and again in the compliance certificate attached
+            # to the same file. That is one covenant repeated, not several, so keep the
+            # instance sitting closest to the covenant heading and drop the restatements.
+            # An earlier reading blamed two files sharing an exhibit number; adding the
+            # file name moved the distinct count by three rows, which ruled that out.
+            best: dict[tuple, dict] = {}
             for row in extract(text or ""):
+                key = (row["covenant_type"], row["direction"], row["level"], row["unit"])
+                prev = best.get(key)
+                if prev is None or row["chars_from_heading"] < prev["chars_from_heading"]:
+                    best[key] = row
+            for row in best.values():
                 rows.append((str(cik), str(adsh), form, str(filed), exhibit, fname, kind,
-                             row["covenant_type"], row["direction"], row["level"],
-                             row["unit"], row["level_index"], row["is_schedule"],
-                             row["applies_from"], row["near_covenant_heading"],
-                             row["confidence"], row["chars_from_heading"],
-                             row["sentence"]))
+                                 row["covenant_type"], row["direction"], row["level"],
+                                 row["unit"], row["level_index"], row["is_schedule"],
+                                 row["applies_from"], row["near_covenant_heading"],
+                                 row["confidence"], row["chars_from_heading"],
+                                 row["sentence"]))
         if rows:
             con.executemany(
                 "INSERT INTO terms VALUES (" + ", ".join("?" * 18) + ")", rows)
