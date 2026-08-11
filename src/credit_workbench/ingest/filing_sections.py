@@ -283,28 +283,38 @@ def dry_run(filings: list[tuple]) -> None:
     # Risk factors were found in well under every filing. Absence is expected for
     # smaller reporting companies, which are exempt from Item 1A; a parse failure is
     # not. Separate the two rather than assume the innocent explanation.
+    # Measure what actually decides the outcome: how many Item 1A headings the document
+    # contains and how much text follows the best of them. Reporting the context of the
+    # *first* heading told me nothing, because the first is nearly always the contents
+    # page - a section is dropped only when the best candidate is too short to keep.
     missing = [d for d in docs if "1A" not in {r[5] for r in d["rows"]}]
     print(f"\nItem 1A absent in {len(missing)} of {len(docs)} filings - why?")
-    exempt = stub = no_heading = unexplained = 0
+    buckets = {"no heading at all": 0, "best candidate under 200 chars": 0,
+               "candidate long enough - a real bug": 0}
+    shown = 0
     for d in missing:
-        low = d["text"].lower()
-        heading = re.search(r"^\s*item\s*1a\b", low, re.MULTILINE)
-        if not heading:
-            no_heading += 1
-        elif "smaller reporting company" in low[heading.start():heading.start() + 1200]:
-            exempt += 1
-        elif re.search(r"not (applicable|required)",
-                       low[heading.start():heading.start() + 400]):
-            stub += 1
+        text = d["text"]
+        all_marks = [m.start() for m in ITEM_RE.finditer(text)]
+        mine = [m.start() for m in
+                re.finditer(r"^\s*item\s*1a\b", text, re.IGNORECASE | re.MULTILINE)]
+        if not mine:
+            buckets["no heading at all"] += 1
+            continue
+        best = 0
+        for pos in mine:
+            after = [p for p in all_marks if p > pos]
+            best = max(best, (min(after) if after else len(text)) - pos)
+        if best < 200:
+            buckets["best candidate under 200 chars"] += 1
+            if shown < 3:
+                shown += 1
+                print(f"    short  {d['adsh']}  best candidate {best} chars: "
+                      f"{text[mine[0]:mine[0] + 100]!r}")
         else:
-            unexplained += 1
-            if unexplained <= 3:
-                print(f"    UNEXPLAINED {d['adsh']}: "
-                      f"{d['text'][heading.start():heading.start() + 130]!r}")
-    print(f"  exempt (smaller reporting company)   {exempt}")
-    print(f"  stub ('not applicable' / 'none')     {stub}")
-    print(f"  no Item 1A heading in the document   {no_heading}")
-    print(f"  UNEXPLAINED - would be a parse bug   {unexplained}")
+            buckets["candidate long enough - a real bug"] += 1
+            print(f"    BUG    {d['adsh']}  best candidate {best} chars")
+    for label, n in buckets.items():
+        print(f"  {label:<34} {n}")
 
     print("\nItem 15 length (should be an exhibit list, not the F-pages):")
     fifteen = sorted(r[7] for r in rows if r[5] == "15")
