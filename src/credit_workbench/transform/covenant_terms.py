@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import time
 
 import duckdb
 
@@ -278,7 +279,7 @@ COLUMNS = """
         confidence VARCHAR, chars_from_heading BIGINT, sentence VARCHAR"""
 
 
-def build(sample: int = 0) -> None:
+def build(sample: int = 0, rebuild_all: bool = False) -> None:
     """Read the agreements a batch at a time, writing each batch out before the next.
 
     An earlier version pulled every agreement's text into one table and accumulated all
@@ -288,14 +289,35 @@ def build(sample: int = 0) -> None:
     next is read.
     """
     con = connect()
+
+    # Only read agreements that have not been read before. The mart already covers
+    # 2019-2026, so a rerun after a backfill should cost the new agreements and not the
+    # whole corpus again - which matters when compute is the binding constraint.
+    already: set[str] = set()
+    if not sample and not rebuild_all:
+        try:
+            already = {r[0] for r in con.execute(
+                f"SELECT DISTINCT adsh FROM read_parquet('{OUT}/*/*.parquet', "
+                f"hive_partitioning = true, union_by_name = true)").fetchall()}
+            print(f"{len(already):,} agreements already extracted, and will be skipped")
+        except duckdb.IOException:
+            print("no existing covenant output; reading the whole corpus")
+
+    con.execute(f"""
+        CREATE OR REPLACE TABLE done (adsh VARCHAR)""")
+    if already:
+        con.executemany("INSERT INTO done VALUES (?)", [(a,) for a in already])
+
     con.execute(f"""
         CREATE OR REPLACE TABLE keys AS
-        SELECT adsh, exhibit_number,
-               row_number() OVER (ORDER BY adsh, exhibit_number) AS rn
+        SELECT e.adsh, e.exhibit_number,
+               row_number() OVER (ORDER BY e.adsh, e.exhibit_number) AS rn
         FROM read_parquet('{EXHIBITS}/*/*.parquet', hive_partitioning = true,
-                          union_by_name = true)
-        WHERE doc_kind IN ('credit_agreement', 'amendment', 'note_purchase')
-        {f'ORDER BY hash(adsh) LIMIT {sample}' if sample else ''}""")
+                          union_by_name = true) e
+        LEFT JOIN done d ON d.adsh = e.adsh
+        WHERE e.doc_kind IN ('credit_agreement', 'amendment', 'note_purchase')
+          AND d.adsh IS NULL
+        {f'ORDER BY hash(e.adsh) LIMIT {sample}' if sample else ''}""")
     total = con.execute("SELECT count(*) FROM keys").fetchone()[0]
     print(f"{total:,} agreements to read")
 
@@ -336,11 +358,14 @@ def build(sample: int = 0) -> None:
     if not written:
         raise SystemExit("no covenant terms extracted - refusing to write an empty mart")
 
+    # A distinct filename per run, so an incremental pass adds to the partitions rather
+    # than replacing what earlier passes wrote.
+    stamp = f"cov_{int(time.time())}"
     con.execute(f"""
         COPY (SELECT *, CAST(substr(filing_date, 1, 4) AS INTEGER) AS filing_year
               FROM terms)
         TO '{OUT}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (filing_year),
-                    OVERWRITE_OR_IGNORE, FILENAME_PATTERN 'cov_{{i}}')""")
+                    OVERWRITE_OR_IGNORE, FILENAME_PATTERN '{stamp}_{{i}}')""")
     print(f"DONE: {written:,} covenant levels from {total:,} agreements")
 
 
@@ -387,11 +412,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sample", type=int, default=0)
     ap.add_argument("--register", action="store_true")
+    ap.add_argument("--rebuild-all", action="store_true",
+                    help="re-read every agreement instead of only the new ones")
     args = ap.parse_args()
     if args.register:
         register()
     else:
-        build(args.sample)
+        build(args.sample, args.rebuild_all)
 
 
 if __name__ == "__main__":

@@ -18,8 +18,11 @@ on:
         description: "Reload archives already present"
         type: boolean
         default: false
-  schedule:
-    - cron: "0 4 * * 1"   # Mondays 04:00 UTC — picks up newly published archives
+  # Weekly archive pickup. Paused while Actions minutes are constrained. SEC publishes
+  # quarterly, so a manual run after each publication keeps the lake current.
+  # Re-enable by uncommenting the two lines below.
+  # schedule:
+  #   - cron: "0 4 * * 1"   # Mondays 04:00 UTC — picks up newly published archives
 
 jobs:
   plan:

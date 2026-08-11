@@ -2,8 +2,11 @@ name: ingest-entities
 # Tracker B1 — entity master + full filing index from SEC bulk submissions.
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 3 * * 0"   # Sundays 03:00 UTC
+  # Weekly entity refresh. Paused while Actions minutes are constrained - the entity
+  # master changes slowly, so this costs freshness rather than correctness.
+  # Re-enable by uncommenting the two lines below.
+  # schedule:
+  #   - cron: "0 3 * * 0"   # Sundays 03:00 UTC
 
 jobs:
   load:
