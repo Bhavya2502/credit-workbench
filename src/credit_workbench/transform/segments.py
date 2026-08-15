@@ -168,8 +168,14 @@ def register() -> None:
     # number. Both marts now carry the same is_latest / is_first_report contract the
     # rest of the warehouse uses. Materialised rather than computed in a view, so a
     # query does not pay for the window sort every time.
-    for target, source in (("marts.segments", "marts.segments_all_vintages"),
-                           ("marts.concentration", "marts.concentration_all_vintages")):
+    # The two marts are shaped differently - segments is sliced by axis and member,
+    # concentration by counterparty and benchmark - so each needs its own key. Applying
+    # one key to both is what broke the first attempt.
+    for target, source, slice_cols in (
+            ("marts.segments", "marts.segments_all_vintages", ("member", "axis")),
+            ("marts.concentration", "marts.concentration_all_vintages",
+             ("counterparty", "benchmark"))):
+        slices = ", ".join(f"coalesce({c}, '')" for c in slice_cols)
         md.execute(f"DROP VIEW IF EXISTS {target}")
         md.execute(f"DROP TABLE IF EXISTS {target}")
         md.execute(f"""
@@ -179,8 +185,7 @@ def register() -> None:
                    filed = min(filed) OVER w AS is_first_report,
                    count(*) OVER w AS filings_reporting
             FROM {source}
-            WINDOW w AS (PARTITION BY cik, period_end, qtrs, tag, uom,
-                                      coalesce(member, ''), coalesce(axis, ''))""")
+            WINDOW w AS (PARTITION BY cik, period_end, qtrs, tag, uom, {slices})""")
         n, latest = md.execute(
             f"SELECT count(*), count(*) FILTER (WHERE is_latest) FROM {target}"
         ).fetchone()
