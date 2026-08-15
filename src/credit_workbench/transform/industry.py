@@ -124,22 +124,32 @@ def build() -> None:
                         WHEN n2 >= {MIN_PEERS} THEN 'sic2'
                         ELSE 'division' END AS industry_level
             FROM counts)
-        SELECT sic4, sic3, sic2, division_code, division_name, sic4_description,
-               industry_level,
-               CASE industry_level WHEN 'sic4' THEN sic4 WHEN 'sic3' THEN sic3
-                                   WHEN 'sic2' THEN sic2 ELSE division_code END
-                   AS industry_code,
-               CASE industry_level
-                    WHEN 'sic4' THEN sic4_description
-                    WHEN 'sic3' THEN 'SIC ' || sic3 || ' group'
-                    WHEN 'sic2' THEN 'SIC ' || sic2 || ' major group'
-                    ELSE division_name END AS industry_label,
-               CASE industry_level WHEN 'sic4' THEN n4 WHEN 'sic3' THEN n3
-                                   WHEN 'sic2' THEN n2 ELSE n1 END AS peers,
+        coded AS (
+            SELECT sic4, sic3, sic2, division_code, division_name, sic4_description,
+                   industry_level,
+                   CASE industry_level WHEN 'sic4' THEN sic4 WHEN 'sic3' THEN sic3
+                                       WHEN 'sic2' THEN sic2 ELSE division_code END
+                       AS industry_code,
+                   -- A bucket above four digits holds only the codes that did not
+                   -- qualify lower down, so it is a residual and is named as one.
+                   CASE industry_level
+                        WHEN 'sic4' THEN sic4_description
+                        WHEN 'sic3' THEN 'SIC ' || sic3 || ' group (other)'
+                        WHEN 'sic2' THEN 'SIC ' || sic2 || ' major group (other)'
+                        ELSE division_name || ' (other)' END AS industry_label
+            FROM assigned),
+        -- Peers counted after assignment, not before. Counting the whole major group
+        -- credited the residual bucket with companies that had already been given
+        -- their own group: SIC 28 showed 1,363 peers when 814 of them were in 2834.
+        membership AS (
+            SELECT c.industry_code, count(DISTINCT u.cik) AS peers
+            FROM coded c JOIN u ON u.sic4 = c.sic4
+            GROUP BY c.industry_code)
+        SELECT c.*, m.peers,
                -- A house scheme is a business decision, not something to infer. Load it
                -- here and everything downstream follows.
                CAST(NULL AS VARCHAR) AS custom_industry
-        FROM assigned""")
+        FROM coded c JOIN membership m ON m.industry_code = c.industry_code""")
 
     rows, groups = con.execute("""
         SELECT count(*), count(DISTINCT industry_code) FROM ref.industry_group""").fetchone()
