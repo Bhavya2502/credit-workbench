@@ -32,8 +32,9 @@ Read these before writing any query. Each one has produced wrong numbers in this
 
 ### Rule 1 — always filter the vintage
 
-`staging.facts_pit` and `marts.facts_dimensioned` hold **every restatement** of every
-figure. A balance-sheet date is re-reported by ~3.1 filings.
+`staging.facts_pit`, `marts.facts_dimensioned` and `marts.segments` hold **every
+restatement** of every figure. A balance-sheet date is re-reported by ~3.1 filings; only
+59% of segment rows are the latest vintage.
 
 ```sql
 WHERE is_latest            -- best current knowledge
@@ -43,6 +44,31 @@ WHERE is_first_report      -- as first published; USE THIS FOR ANY MODEL
 Without one of these you count each figure about three times. Anything a model trains on
 must use `is_first_report`, or it learns from restatements that did not exist at the
 observation date.
+
+**What it costs, concretely.** Intel's FY2024 Client Computing Group revenue:
+
+```sql
+-- WRONG: $338bn
+SELECT sum(value) FROM marts.segments
+WHERE TRY_CAST(cik AS BIGINT) = 50863 AND fy = 2024
+  AND member = 'ClientComputingGroup' AND qtrs = 4 AND uom = 'USD'
+  AND tag = 'RevenueFromContractWithCustomerExcludingAssessedTax';
+
+-- RIGHT: $30.29bn, the reported figure
+SELECT sum(value) FROM marts.segments
+WHERE TRY_CAST(cik AS BIGINT) = 50863 AND fy = 2024
+  AND member = 'ClientComputingGroup' AND qtrs = 4 AND uom = 'USD'
+  AND tag = 'RevenueFromContractWithCustomerExcludingAssessedTax'
+  AND is_latest;
+```
+
+An eleven-fold overstatement that looks like a plausible number. `marts.concentration`
+still lacks these flags — dedupe it yourself on `filed` until it is rebuilt:
+
+```sql
+QUALIFY row_number() OVER (
+    PARTITION BY cik, period_end, qtrs, tag, counterparty ORDER BY filed DESC) = 1
+```
 
 ### Rule 2 — `marts.facts_by_note` is many-to-many
 
@@ -298,6 +324,24 @@ ON lpad(CAST(a.cik AS VARCHAR), 10, '0') = lpad(CAST(b.cik AS VARCHAR), 10, '0')
 - **Other schemas are not this project.** `gold`, `silver`, `catalog` belong to a separate
   credit workstream (India LGD/PD, IBBI insolvency, FDIC, Bondora). `hn`, `kaggle`, `nyc`,
   `stackoverflow_survey` are MotherDuck samples.
+- **MotherDuck enforces a daily compute limit** on the free plan. Heavy scans over
+  `marts.facts_dimensioned` (222m rows) or `ref.tag_note_map` (279m rows) consume it
+  quickly. Filter by `cik`, `fy` or `period_year` before aggregating, and prefer the
+  materialised marts over the raw layer.
+
+### Segment coverage is not patchy — check the size band
+
+A company with one reportable segment discloses none, so absence is usually correct:
+
+| Size band | Companies with segments |
+|---|---|
+| Over $10bn | 89.0% |
+| $1bn–$10bn | 88.4% |
+| $100m–$1bn | 84.8% |
+| Under $100m | 62.8% |
+
+If a specific large company returns nothing, check the `cik` format before concluding the
+data is missing — `TRY_CAST(cik AS BIGINT) = 50863` is the safest form.
 
 ---
 
