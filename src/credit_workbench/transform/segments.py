@@ -176,8 +176,16 @@ def register() -> None:
             ("marts.concentration", "marts.concentration_all_vintages",
              ("counterparty", "benchmark"))):
         slices = ", ".join(f"coalesce({c}, '')" for c in slice_cols)
-        md.execute(f"DROP VIEW IF EXISTS {target}")
-        md.execute(f"DROP TABLE IF EXISTS {target}")
+        # `IF EXISTS` does not make DROP forgiving about the kind of object it finds:
+        # DROP VIEW on a table raises, so the second statement never ran. Ask what is
+        # there first. These marts were views before they were tables, so both cases
+        # occur in the wild.
+        schema, table = target.split(".")
+        existing = md.execute("""
+            SELECT table_type FROM information_schema.tables
+            WHERE table_schema = ? AND table_name = ?""", [schema, table]).fetchone()
+        if existing:
+            md.execute(f"DROP {'VIEW' if 'VIEW' in existing[0] else 'TABLE'} {target}")
         md.execute(f"""
             CREATE TABLE {target} AS
             SELECT *,
