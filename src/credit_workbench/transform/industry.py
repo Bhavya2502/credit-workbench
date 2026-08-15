@@ -123,7 +123,7 @@ def build() -> None:
                         WHEN n3 >= {MIN_PEERS} THEN 'sic3'
                         WHEN n2 >= {MIN_PEERS} THEN 'sic2'
                         ELSE 'division' END AS industry_level
-            FROM counts)
+            FROM counts),
         coded AS (
             SELECT sic4, sic3, sic2, division_code, division_name, sic4_description,
                    industry_level,
