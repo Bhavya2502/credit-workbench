@@ -153,11 +153,11 @@ def build(lo: int, hi: int) -> None:
 
 def register() -> None:
     md = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
-    md.execute("DROP VIEW IF EXISTS marts.segments")
+    md.execute("DROP VIEW IF EXISTS marts.segments_all_vintages")
     md.execute(f"""
         CREATE VIEW marts.segments_all_vintages AS SELECT * FROM read_parquet(
             '{SEG_OUT}/*/*.parquet', hive_partitioning = true, union_by_name = true)""")
-    md.execute("DROP VIEW IF EXISTS marts.concentration")
+    md.execute("DROP VIEW IF EXISTS marts.concentration_all_vintages")
     md.execute(f"""
         CREATE VIEW marts.concentration_all_vintages AS SELECT * FROM read_parquet(
             '{CONC_OUT}/*/*.parquet', hive_partitioning = true, union_by_name = true)""")
