@@ -155,14 +155,39 @@ def register() -> None:
     md = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
     md.execute("DROP VIEW IF EXISTS marts.segments")
     md.execute(f"""
-        CREATE VIEW marts.segments AS SELECT * FROM read_parquet(
+        CREATE VIEW marts.segments_all_vintages AS SELECT * FROM read_parquet(
             '{SEG_OUT}/*/*.parquet', hive_partitioning = true, union_by_name = true)""")
     md.execute("DROP VIEW IF EXISTS marts.concentration")
     md.execute(f"""
-        CREATE VIEW marts.concentration AS SELECT * FROM read_parquet(
+        CREATE VIEW marts.concentration_all_vintages AS SELECT * FROM read_parquet(
             '{CONC_OUT}/*/*.parquet', hive_partitioning = true, union_by_name = true)""")
 
-    for name in ("marts.segments", "marts.concentration"):
+    # Segments carried no vintage flag, unlike the fact tables, so a naive sum counted
+    # every restatement: Intel's FY2024 Client Computing revenue came out at $338bn
+    # against a reported $30.29bn - an elevenfold overstatement that looks like a real
+    # number. Both marts now carry the same is_latest / is_first_report contract the
+    # rest of the warehouse uses. Materialised rather than computed in a view, so a
+    # query does not pay for the window sort every time.
+    for target, source in (("marts.segments", "marts.segments_all_vintages"),
+                           ("marts.concentration", "marts.concentration_all_vintages")):
+        md.execute(f"DROP VIEW IF EXISTS {target}")
+        md.execute(f"DROP TABLE IF EXISTS {target}")
+        md.execute(f"""
+            CREATE TABLE {target} AS
+            SELECT *,
+                   filed = max(filed) OVER w AS is_latest,
+                   filed = min(filed) OVER w AS is_first_report,
+                   count(*) OVER w AS filings_reporting
+            FROM {source}
+            WINDOW w AS (PARTITION BY cik, period_end, qtrs, tag, uom,
+                                      coalesce(member, ''), coalesce(axis, ''))""")
+        n, latest = md.execute(
+            f"SELECT count(*), count(*) FILTER (WHERE is_latest) FROM {target}"
+        ).fetchone()
+        print(f"table {target}  {n:,} rows, {latest:,} latest vintage "
+              f"({100 * latest / max(n, 1):.0f}%)")
+
+    for name in ("marts.segments_all_vintages", "marts.concentration_all_vintages"):
         rows, companies = md.execute(
             f"SELECT count(*), count(DISTINCT cik) FROM {name}").fetchone()
         print(f"view  {name}  {rows:,} rows, {companies:,} companies")
@@ -177,6 +202,10 @@ def register() -> None:
             FROM marts.segments
             WHERE axis IN ('BusinessSegments', 'StatementBusinessSegments')
               AND tag LIKE 'Revenue%' AND qtrs = 4 AND uom = 'USD' AND value > 0
+              -- One vintage per figure. The share would partly self-cancel without
+              -- this, but only if every segment were restated the same number of
+              -- times, which is not something to rely on.
+              AND is_latest
             GROUP BY cik, fy, period_end, member),
         tot AS (
             SELECT cik, fy, period_end, sum(segment_revenue) AS total_segment_revenue,
