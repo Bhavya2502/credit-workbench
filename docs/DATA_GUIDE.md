@@ -417,16 +417,22 @@ has_say_on_pay, has_pay_vs_performance, has_cda, has_section16_disclosure`.
 
 ### Coverage, measured on a 60-filing sample — read this before scoring
 
+Measured on the full filing-year 2024 load — 4,864 scored filings, not a sample.
+
 | Metric | Fires on | Trust |
 |---|---|---|
-| audit fee figure, non-audit ratio | 67% | high — 96% of filings with a stated total tie to it |
-| all four fee categories | 48% | high |
-| related-party section | 75% | high as text; the dollar figure is the largest in the section, not a total |
-| CEO pay ratio | 42% | good — bounded to 1…10,000 |
+| `audit_fees`, `non_audit_fee_ratio` | 77% | high — **98.4%** of filings stating a total tie to it; median $1.40m |
+| all four fee categories | 52% | high |
+| related-party section | 75% | high as text; the dollar figure is the largest in the section, **not a total** |
+| CEO pay ratio | 39% | good — bounded to 1…10,000; median 87 |
 | section flags (`has_*`) | 38–75% | presence of the section, not the substance of the policy |
-| director table | 38% | moderate — median board 6, floor of 4 directors |
-| `directors_marked_independent` | 10% | only where the table has an independence column |
+| director table (`directors_listed`) | 47% | good — median board 7, floor of 4 |
+| `directors_marked_independent` | 8% | only where the table carries an independence column |
 | `independence_statement` | 57% | evidence text for a human or LLM pass, **not a count** |
+
+`fee_units_overridden` marks the 0.8% of filings whose own units note was ignored because
+applying it produced an impossible fee — Hyatt's 2024 proxy heads its table "(in
+millions)" above figures plainly in dollars. Treat those rows as read-but-corrected.
 
 **Board independence is deliberately not a number.** The clean phrasing — "X of our Y
 directors are independent" — appears in 2% of proxies, and a looser pattern matched prose

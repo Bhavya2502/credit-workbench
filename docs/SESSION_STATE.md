@@ -23,17 +23,33 @@ what remains). Ask the owner for the artifact links.
 
 ## Just completed
 
-**The proxy / governance gap (G3) is built and validated, but not yet backfilled.**
-Code is on `main`; nothing has been fetched into the lake yet. Run it with:
+**The proxy / governance gap (G3) is built, validated and backfilling.** Filing year 2024
+is loaded and passes **18/18 invariants**; the remaining years of 2019–2026 (filers with
+financials) were dispatched after that. Re-run `register` then `metrics` when the fetch
+finishes — the section view is over parquet, so new partitions need the view refreshed
+and the mart rebuilt.
 
 ```bash
-gh workflow run ingest_proxy.yml -f parts=sections -f years=2019-2026
+gh workflow run ingest_proxy.yml -f parts=sections -f years=2019-2026 -f with_financials=true
 gh workflow run ingest_proxy.yml -f parts=register
-gh workflow run ingest_proxy.yml -f parts=metrics
+gh workflow run ingest_proxy.yml -f parts=metrics      # runs verify_governance too
 ```
 
-`sections_dry` first if anything in the splitter changed. The `metrics` job reads stored
-text, so the extractor can be corrected and re-run without re-fetching from SEC.
+`sections_dry` first if anything in the splitter changed. The fetch **skips filings
+already in the lake**, so ranges may overlap and a re-run is cheap. The `metrics` job
+reads stored text, so the extractor can be corrected and re-run without touching SEC.
+
+Measured on the 2024 load — 65,043 sections, 4,859 proxies, 4,541 companies:
+
+| Invariant | Result |
+|---|---|
+| Fee components tie to the filer's stated total | **98.4%** of 2,530 |
+| Audit fees over $500m (impossible) | **0** — was 21 before the fixes |
+| Median audit fee | $1,400,555 |
+| Units note overridden as wrong | 0.8% |
+| Median board size, where a table was found | 7.0, on 2,299 filings |
+| Median CEO pay ratio | 87, on 1,897 filings |
+| Fan-out anywhere | none — 65,043 rows = 65,043 distinct |
 
 What was found, in the order it mattered:
 
