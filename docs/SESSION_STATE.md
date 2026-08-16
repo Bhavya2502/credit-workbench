@@ -141,6 +141,23 @@ actually requires NAICS — the SIC hierarchy above may be enough for cyclicalit
   expect it after. **That is a hypothesis, not a measured fact** — test it before
   building on it.
 
+  **This probably explains the `quali.note_signals.material_weakness` failure.** That
+  signal is documented in `DATA_GUIDE.md` §7 as discriminating inversely — flagged
+  companies defaulted *less* — and it is built the phrase way, matching
+  `material weakness … identified|in internal control` with negation guards
+  (`transform/note_corpus.py`). The phrase catches the definition and the
+  remediation-of-a-fixed-weakness discussion, and thorough filers write longer controls
+  discussions than terse small ones, which is a mechanism for inverting the sign. The
+  polarity of the conclusion sentence does not have that problem, and pointed the right
+  way at 2.3×.
+
+  **Do not read this as a like-for-like win.** The old signal was measured on
+  `default_24m` over XBRL note text; the new one on `distress_24m` over Item 9A. Two
+  different labels and two different sources. The claim that is supported is that
+  polarity works where the phrase did not — not that one is a drop-in replacement for
+  the other. Anyone building this should re-measure against `default_24m` as well, and
+  consider whether `note_signals.material_weakness` should then be retired or rebuilt.
+
   The adverse rate of 11–15% is higher than the ~5% quoted for accelerated filers and is
   not an error: this population is all SEC filers, where management-only assessments by
   smaller reporting companies fail far more often. The distress lift corroborates it.

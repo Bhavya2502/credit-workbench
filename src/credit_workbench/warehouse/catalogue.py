@@ -99,6 +99,23 @@ DESCRIBED: dict[str, tuple[str, str]] = {
         "one row per (filing, signal)",
         "14 note-derived signals with negation guards. material_weakness is "
         "documented as unusable - it discriminates inversely."),
+    "quali.proxy_sections": (
+        "one row per (company, filing, proxy section)",
+        "DEF 14A governance sections, 20 kinds, a median of 13 per filing. Text keeps "
+        "table rows on one line, cells joined by ' | ', unlike filing_sections - the "
+        "fee, director and compensation tables are only readable that way."),
+    "quali.proxy_audit_fees": (
+        "one row per (company, filing)",
+        "Principal accountant fee section text."),
+    "quali.proxy_related_party": (
+        "one row per (company, filing)",
+        "Related person transaction section text."),
+    "marts.governance_metrics": (
+        "one row per (company, proxy filing)",
+        "Management Risk inputs: audit and non-audit fee split, director counts, CEO "
+        "pay ratio, related-party scale, policy flags. Coverage varies by metric from "
+        "38% to 75% - see DATA_GUIDE section 10 before scoring. directors_listed is "
+        "NULL where no director table was found and must not be read as zero."),
     "quali.exhibits": (
         "one row per (filing, exhibit document)",
         "EX-10 and EX-4 documents, full text."),
