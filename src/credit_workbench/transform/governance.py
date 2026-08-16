@@ -52,17 +52,35 @@ FEE_ROW = {
     "tax": r"^tax\s*fees?\b",
     "other": r"^all\s*other\s*fees?\b",
 }
-TOTAL_ROW = r"^total\b"
+# "Total", "Total fees", "Total fees paid" - but not "Total Compensation (Per Comp
+# Table)", which pulled an entire Pay-versus-Performance table in as a fee block and
+# supplied a total of 10,522,375 against components that had nothing to do with it.
+TOTAL_ROW = r"^total(\s+fees?(\s+(paid|billed|and\s+\w+))?)?$|^total\s+fees?\b"
 COMPONENTS = ("audit", "audit_related", "tax", "other")
-BLOCK_GAP = 25          # rows of a table sit close together; 25 lines is generous
-NUM = re.compile(r"^\(?\$?\s*([\d,]+(?:\.\d+)?)\)?$")
-DASH = re.compile(r"^[—–\-]+$")
-UNITS = re.compile(r"\(?\s*(?:\$\s*)?in\s+(thousands|millions)\s*\)?", re.IGNORECASE)
+BLOCK_GAP = 12          # a real fee table's rows are adjacent; 25 spanned other tables
+NUM = re.compile(r"^\$?\s*([\d,]+(?:\.\d+)?)$")
+FOOTNOTE = re.compile(r"^\(\s*\d{1,2}\s*\)$")
+DASH = re.compile(r"^(?:[—–\-]+|nil|none|n/?a)$", re.IGNORECASE)
+# The word "in" is optional and often absent: "(USD$ millions)", "($ thousands)",
+# "2023 (in millions)". Missing those left a table of 0.88 unscaled, so an $880,000
+# audit fee was stored as 88 cents.
+UNITS = re.compile(r"\(?\s*(?:in\s+|\$\s*|usd\s*\$?\s*)*"
+                   r"(thousands|millions)\s*\)?", re.IGNORECASE)
 
 
 def money(cell: str) -> float | None:
-    """A fee cell is a number, or a dash meaning nil. Anything else is not a figure."""
-    c = cell.strip().lstrip("$").strip()
+    """A fee cell is a number, or a dash or 'nil' meaning zero.
+
+    A parenthesised value is *not* read as a negative here. Filings put the footnote
+    marker in its own cell - "Audit fees | (1) | $ | 700,140" - and reading "(1)" as a
+    number returned an audit fee of 1, with audit-related 2 and tax 3: the footnote
+    numbering, in a table whose real figures were right beside it. Fees are never
+    negative, so nothing is lost by refusing parentheses outright.
+    """
+    c = cell.strip()
+    if FOOTNOTE.match(c) or c.startswith("("):
+        return None
+    c = c.lstrip("$").strip()
     if DASH.match(c):
         return 0.0
     m = NUM.match(c)
@@ -161,18 +179,42 @@ def best_fee_block(text: str) -> dict | None:
 
 
 SCALE = {"dollars": 1.0, "thousands": 1_000.0, "millions": 1_000_000.0}
+# The largest audit fee paid by any company in the world is around $130m. $200m is a
+# ceiling no real engagement approaches, so a figure above it is arithmetic, not a fee.
+IMPLAUSIBLE_ABOVE = 200_000_000.0
+PLAUSIBLE_FLOOR = 10_000.0
+
+
+def applied_units(found: dict[str, float], units: str) -> tuple[str, bool]:
+    """Honour the units note unless applying it produces an impossible fee.
+
+    Hyatt's 2024 proxy heads its table "Type of Fees (in millions)" and then lists
+    8,796,173 - which is $8.8m stated in dollars, and $8.8 *trillion* if the note is
+    believed. The note is simply wrong, and no amount of care in reading it helps; the
+    only defence is knowing what an audit fee can be. So the note is applied unless it
+    lands outside the possible range while the unscaled figure sits inside it.
+    """
+    audit = found.get("audit")
+    if audit is None or units == "dollars":
+        return units, False
+    scaled = audit * SCALE[units]
+    if scaled > IMPLAUSIBLE_ABOVE and PLAUSIBLE_FLOOR <= audit <= IMPLAUSIBLE_ABOVE:
+        return "dollars", True
+    return units, False
 
 
 def fees(text: str) -> dict:
     b = best_fee_block(text)
     if not b:
         return {}
-    k = SCALE[b["units"]]
+    units, overridden = applied_units(b["found"], b["units"])
+    k = SCALE[units]
     out = {f"{name}_fees": v * k for name, v in b["found"].items()
            if name in COMPONENTS}
     if "total" in b["found"]:
         out["total_fees_stated"] = b["found"]["total"] * k
-    out["fee_units"] = b["units"]
+    out["fee_units"] = units
+    out["fee_units_overridden"] = overridden
     parts = [b["found"].get(c) for c in COMPONENTS]
     if all(p is not None for p in parts):
         out["fee_components_sum"] = sum(parts) * k
@@ -312,7 +354,7 @@ NUMERIC = ["audit_fees", "audit_related_fees", "tax_fees", "other_fees",
            "ceo_pay_ratio", "related_party_max_amount"]
 INTEGER = ["directors_listed", "directors_marked_independent", "sections_found",
            "related_party_chars"]
-BOOLEAN = list(FLAG_SECTIONS)
+BOOLEAN = [*FLAG_SECTIONS, "fee_units_overridden"]
 TEXT = ["cik", "adsh", "form", "filing_date", "period_of_report", "fee_units",
         "fee_source_section", "independence_statement"]
 

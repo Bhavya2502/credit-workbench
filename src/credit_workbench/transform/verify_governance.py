@@ -115,6 +115,25 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.governance_metrics WHERE audit_fees IS NOT NULL""",
      "dollars > 0 and pct_under_10k < 5"),
 
+    # Overriding a filing's own units note is a real correction - Hyatt's 2024 proxy
+    # heads its fee table "(in millions)" above figures that are plainly dollars - but it
+    # is also the kind of rescue that can hide a systemic misread. If it fires often, the
+    # units patterns are wrong rather than the filers.
+    ("overriding the filer's units note stays rare",
+     """SELECT count(*) FILTER (WHERE fee_units_overridden) AS overridden,
+               count(*) AS with_fees,
+               round(100.0 * count(*) FILTER (WHERE fee_units_overridden)
+                     / count(*), 2) AS pct_overridden
+        FROM marts.governance_metrics WHERE audit_fees IS NOT NULL""",
+     "pct_overridden < 2.0"),
+
+    ("footnote markers are not being read as figures",
+     """SELECT count(*) AS with_fees,
+               count(*) FILTER (WHERE audit_fees < 100) AS audit_under_100,
+               count(*) FILTER (WHERE audit_fees IN (1, 2, 3, 4)) AS looks_like_footnote
+        FROM marts.governance_metrics WHERE audit_fees IS NOT NULL""",
+     "looks_like_footnote == 0"),
+
     ("the non-audit ratio is a ratio, and mostly small as independence requires",
      """SELECT count(*) AS n, round(median(non_audit_fee_ratio), 3) AS median_ratio,
                count(*) FILTER (WHERE non_audit_fee_ratio < 0) AS negative,
