@@ -221,13 +221,18 @@ async def run_chunk(rows: list[tuple], keep_text: bool = False) -> list:
     return [row for d in docs for row in d["rows"]]
 
 
-# The check that a section is what it claims: text that never says the one word the
-# section is about means the heading matched something else.
+# The check that a section is what it claims: text that says none of the words the
+# section is about means the heading matched something else. Alternatives are allowed
+# because one word was not enough - a clawback section headed "Clawback Policy" need
+# never use "recover", and scoring it against that word alone flagged a sound section.
 PROBES = {
-    "independence": "independent", "audit_fees": "fee", "related_party": "related",
-    "committees": "committee", "cda": "compensation", "risk_oversight": "risk",
-    "ownership": "shares", "summary_comp": "salary", "clawback": "recover",
-    "nominees": "director", "pay_ratio": "ratio", "audit_report": "audit",
+    "independence": ("independent",), "audit_fees": ("fee",),
+    "related_party": ("related",), "committees": ("committee",),
+    "cda": ("compensation",), "risk_oversight": ("risk",),
+    "ownership": ("shares",), "summary_comp": ("salary",),
+    "clawback": ("clawback", "recoup", "recover", "forfeit"),
+    "nominees": ("director",), "pay_ratio": ("ratio",), "audit_report": ("audit",),
+    "hedging": ("hedg", "pledg"), "section16": ("section 16", "form 4", "beneficial"),
 }
 
 
@@ -267,14 +272,14 @@ def dry_run(filings: list[tuple]) -> None:
               f"{got[len(got)//2]:>9,} {got[int(len(got)*0.9)]:>9,} {got[-1]:>10,}")
 
     print("\nDoes each section read like itself?")
-    for name, word in PROBES.items():
+    for name, words in PROBES.items():
         texts = [r[8] for r in rows if r[5] == name]
         if not texts:
             continue
-        hits = sum(1 for t in texts if word in t.lower())
+        hits = sum(1 for t in texts if any(w in t.lower() for w in words))
         flag = "  <-- suspect" if hits / len(texts) < 0.8 else ""
-        print(f"  {name:<16} contains '{word}': {100*hits/len(texts):5.0f}% "
-              f"of {len(texts):>4}{flag}")
+        print(f"  {name:<16} says {'/'.join(words):<28} "
+              f"{100*hits/len(texts):5.0f}% of {len(texts):>4}{flag}")
 
     # A proxy's headings have no canonical order, so a badly chosen heading does not
     # produce a short section - it produces one that runs to the end of the document.
