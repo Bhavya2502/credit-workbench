@@ -362,25 +362,49 @@ def metrics_for_filing(sections: dict[str, str], meta: dict) -> dict:
 COLUMNS = TEXT + NUMERIC + INTEGER + BOOLEAN
 
 
+BATCH = 400      # filings per read: few enough to bound memory, few enough round trips
+
+
 def build(con) -> int:
-    """Read the section view, write one row per proxy filing."""
+    """Read the section view, write one row per proxy filing.
+
+    Sections are read a batch of filings at a time rather than one filing at a time. Per
+    filing this issued a query each, which for a single year is 4,859 round trips to
+    MotherDuck against the daily compute allowance; the whole text of a year at once
+    would be over a gigabyte held in memory. A batch is neither.
+    """
     filings = con.execute("""
         SELECT cik, adsh, any_value(form) AS form, any_value(filing_date) AS filing_date,
                any_value(period_of_report) AS period_of_report
         FROM quali.proxy_sections
-        GROUP BY cik, adsh""").fetchall()
+        GROUP BY cik, adsh
+        ORDER BY adsh, cik""").fetchall()
     print(f"{len(filings):,} proxy filings to score")
 
     rows: list[dict] = []
-    for cik, adsh, form, filed, period in filings:
-        secs = dict(con.execute("""
-            SELECT section, text FROM quali.proxy_sections
-            WHERE cik = ? AND adsh = ?""", [cik, adsh]).fetchall())
-        rows.append(metrics_for_filing(secs, {
-            "cik": str(cik), "adsh": str(adsh), "form": form,
-            "filing_date": str(filed), "period_of_report": str(period)}))
-        if len(rows) % 2000 == 0:
-            print(f"  scored {len(rows):,}")
+    for start in range(0, len(filings), BATCH):
+        batch = filings[start:start + BATCH]
+        keys = {(str(f[0]), str(f[1])) for f in batch}
+        placeholders = ", ".join(["?"] * len(batch))
+        # One read per batch, keyed on the accession numbers in it. A co-registrant
+        # filing shares an accession, so the CIK is carried through and matched too -
+        # without that a parent would be scored on its subsidiary's sections as well.
+        got = con.execute(f"""
+            SELECT cik, adsh, section, text FROM quali.proxy_sections
+            WHERE adsh IN ({placeholders})""",
+                          [str(f[1]) for f in batch]).fetchall()
+        per_filing: dict[tuple[str, str], dict[str, str]] = {}
+        for cik, adsh, section, text in got:
+            key = (str(cik), str(adsh))
+            if key in keys:
+                per_filing.setdefault(key, {})[section] = text
+
+        for cik, adsh, form, filed, period in batch:
+            secs = per_filing.get((str(cik), str(adsh)), {})
+            rows.append(metrics_for_filing(secs, {
+                "cik": str(cik), "adsh": str(adsh), "form": form,
+                "filing_date": str(filed), "period_of_report": str(period)}))
+        print(f"  scored {len(rows):,} of {len(filings):,}")
 
     con.execute("CREATE SCHEMA IF NOT EXISTS marts")
     con.execute("DROP TABLE IF EXISTS marts.governance_metrics")
