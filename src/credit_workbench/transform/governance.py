@@ -99,13 +99,34 @@ def row_label(cell: str) -> str:
     return re.sub(r"[^a-z\s-]", " ", lab).strip()
 
 
-def first_figure(cells: list[str]) -> float | None:
-    """The current year is the left-hand column; summing the row would double-count."""
-    for c in cells:
-        v = money(c)
-        if v is not None:
-            return v
-    return None
+def figures(cells: list[str]) -> list[float]:
+    """Every cell on the row that parses as a figure, in order."""
+    return [v for v in (money(c) for c in cells) if v is not None]
+
+
+# No audit engagement costs less than a few thousand dollars, so at the table's own scale
+# a figure below this cannot be a fee. Used to step over a footnote marker sitting in its
+# own cell, which is not caught by refusing parentheses: Intel's 2023 proxy renders the
+# marker as a bare "1", giving "Audit Fees | 1 | 12,345,678" and an audit fee of one
+# dollar, with audit-related 2 and tax 3 - the footnote numbering again, in a table whose
+# stated total of $20.1m was read correctly all along.
+FEE_FLOOR = 1_000.0
+
+
+def pick_figure(figs: list[float], scale: float) -> float | None:
+    """The current year's figure, stepping over anything too small to be a fee.
+
+    An explicit zero is taken immediately rather than skipped. These tables are two-year
+    comparatives and a nil current year beside a non-nil prior one is common - "Tax Fees
+    | - | 1,200" means nil this year, and treating the dash as too small to be a fee
+    would report last year's number as this year's.
+    """
+    if not figs:
+        return None
+    for f in figs:
+        if f == 0.0 or f * scale >= FEE_FLOOR:
+            return f
+    return figs[0]      # nothing plausible: keep what the document said
 
 
 def fee_blocks(text: str) -> list[dict]:
@@ -129,11 +150,11 @@ def fee_blocks(text: str) -> list[dict]:
         lab = row_label(cells[0])
         for name, pat in FEE_ROW.items():
             if re.match(pat, lab):
-                marks.append((i, name, first_figure(cells[1:])))
+                marks.append((i, name, figures(cells[1:])))
                 break
         else:
             if re.match(TOTAL_ROW, lab):
-                marks.append((i, "total", first_figure(cells[1:])))
+                marks.append((i, "total", figures(cells[1:])))
     if not marks:
         return []
 
@@ -152,16 +173,22 @@ def fee_blocks(text: str) -> list[dict]:
 
 
 def _block(marks, lines) -> dict:
-    found: dict[str, float] = {}
-    for _, name, val in marks:
-        if name not in found and val is not None:
-            found[name] = val
-    # The units note sits above the table, inside the same section.
+    # The units note sits above the table, inside the same section, and has to be read
+    # before the figures are chosen: whether a value is too small to be a fee depends on
+    # the scale the table is stated at.
     head = "\n".join(lines[max(0, marks[0][0] - 12):marks[0][0] + 1])
     unit = UNITS.search(head)
+    units = unit.group(1).lower() if unit else "dollars"
+
+    found: dict[str, float] = {}
+    for _, name, figs in marks:
+        if name in found:
+            continue
+        val = pick_figure(figs, SCALE[units])
+        if val is not None:
+            found[name] = val
     return {"found": found, "start": marks[0][0], "end": marks[-1][0],
-            "labels": len(marks),
-            "units": (unit.group(1).lower() if unit else "dollars")}
+            "labels": len(marks), "units": units}
 
 
 def block_ties(b: dict) -> bool:

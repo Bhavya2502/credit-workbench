@@ -69,11 +69,30 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM quali.proxy_sections""",
      "pct_indep > 99 and pct_related > 99 and pct_committee > 99"),
 
-    ("table rows survived the conversion — fees are still beside their labels",
-     """SELECT round(100.0 * count(*) FILTER (WHERE text LIKE '%|%')
-                     / count(*), 1) AS pct_with_rows
-        FROM quali.proxy_sections WHERE section = 'audit_fees'""",
-     "pct_with_rows > 80"),
+    # This asked whether 80% of fee sections carry a cell separator, and failed at 79.9%
+    # across eight years having passed at 82.7% on one. The rate is not a constant to
+    # threshold: it climbs steadily from 75.1% in 2019 to 85.2% in 2026 as filers move to
+    # HTML tables. Worse, it was gating on the wrong property - fee sections *without* a
+    # separator still yield a figure 67.8% of the time, so rows are not required for
+    # extraction at all.
+    #
+    # What the converter has to earn is the *gap*: extraction from sections with rows must
+    # beat extraction from those without. That is the claim it was built on (35% to 80% on
+    # the original sample) and the thing that would vanish if it regressed. The absolute
+    # floor stays only to catch the converter emitting no rows whatsoever.
+    ("keeping table rows still buys what it was built to buy",
+     """SELECT round(100.0 * count(*) FILTER (WHERE s.text LIKE '%|%')
+                     / count(*), 1) AS pct_with_rows,
+               round(100.0 * count(g.audit_fees) FILTER (WHERE s.text LIKE '%|%')
+                     / nullif(count(*) FILTER (WHERE s.text LIKE '%|%'), 0), 1)
+                   AS extracted_with_rows,
+               round(100.0 * count(g.audit_fees) FILTER (WHERE s.text NOT LIKE '%|%')
+                     / nullif(count(*) FILTER (WHERE s.text NOT LIKE '%|%'), 0), 1)
+                   AS extracted_without
+        FROM quali.proxy_sections s
+        JOIN marts.governance_metrics g ON g.adsh = s.adsh AND g.cik = s.cik
+        WHERE s.section = 'audit_fees'""",
+     "pct_with_rows > 60 and extracted_with_rows > extracted_without + 10"),
 
     # Metrics -----------------------------------------------------------------
     ("one metric row per proxy filing, no fan-out",
@@ -157,14 +176,22 @@ CHECKS: list[tuple[str, str, str]] = [
     # dominated by small registrants; an S&P 500 sample would sit nearer eleven. The
     # earlier reader returned a median of 4 by accepting officer and committee tables as
     # boards, which is what this check was written to catch.
+    # `over_30 == 0` failed on two filings of 17,876, both showing 31. The size
+    # distribution runs smoothly out to there - 18 appears 32 times, then 19, 20, 21, 22,
+    # 24, 25, 28, 29, 31 - with no cluster of implausible values, which is what a parse
+    # failure looks like. A hard zero was the wrong shape: a share bound still catches a
+    # table read as a board of fifty while tolerating the tail real boards have.
+    #
+    # `between` was also SQL inside a Python eval here, which raised SyntaxError rather
+    # than failing - worse than a wrong threshold, because the suite stopped at this check
+    # and the four after it never ran.
     ("boards are a plausible size where a table was found",
      """SELECT count(*) AS n, round(median(directors_listed), 0) AS median_directors,
-               count(*) FILTER (WHERE directors_listed > 30) AS over_30
+               max(directors_listed) AS largest,
+               round(100.0 * count(*) FILTER (WHERE directors_listed > 30)
+                     / count(*), 3) AS pct_over_30
         FROM marts.governance_metrics WHERE directors_listed IS NOT NULL""",
-     # `between` is SQL and this is eval'd as Python: it raised SyntaxError rather than
-     # failing, which is worse than a wrong threshold because the suite stopped there and
-     # the four checks after it never ran.
-     "n > 100 and 5 <= median_directors <= 15 and over_30 == 0"),
+     "n > 100 and 5 <= median_directors <= 15 and pct_over_30 < 0.5 and largest <= 40"),
 
     ("the CEO pay ratio stays inside its bounds",
      """SELECT count(*) AS n, round(median(ceo_pay_ratio), 0) AS median_ratio,
