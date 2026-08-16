@@ -117,11 +117,33 @@ actually requires NAICS — the SIC hierarchy above may be enough for cyclicalit
 | Feature store (L1) | medium | The bridge to any scoring work; forces point-in-time discipline into one place |
 
 ### 4. Governance work worth doing next, in value order
-- **The controls pillar is still thin.** The proxy gives auditor independence, but the
-  strongest control signal is a material weakness in ICFR, and that sits in
-  `quali.filing_sections` item `9A` — 116,812 sections already in the lake, unparsed.
-  A flag for "material weakness" plus "not effective" is cheap and would complete the
-  fourth scorecard pillar without any fetching.
+
+- **The controls pillar — probed, and the signal is strong. Build this first.**
+  `warehouse/diag_icfr.py` has already answered the design questions against the 116,812
+  Item 9A sections in the lake, so this needs no fetching and no further exploration:
+
+  | Finding | Number |
+  |---|---|
+  | Adverse ICFR conclusion → distress within 24m | **56.97%** |
+  | Clean conclusion → distress within 24m | 24.79% |
+  | Adverse rate, by filing year | 11.3–15.1% |
+  | Conclusion extracted | 23,380 of 36,165 sections |
+  | No conclusion found — the open gap | **12,929 (36%)** |
+
+  A 2.3× distress lift is a stronger signal than most ratios in `marts.ratio_values`.
+  Both polarities were read back sentence by sentence and are accurate.
+
+  Two things to carry over. **Do not use "material weakness" as a finding** — 37.7% of
+  sections mention it, because Item 9A carries the definition as boilerplate; use the
+  polarity of the conclusion sentence, which is what was validated. And the 36% recall
+  gap is probably word order: "maintained effective internal control over financial
+  reporting" puts "effective" before the subject, where the patterns in `diag_icfr.py`
+  expect it after. **That is a hypothesis, not a measured fact** — test it before
+  building on it.
+
+  The adverse rate of 11–15% is higher than the ~5% quoted for accelerated filers and is
+  not an error: this population is all SEC filers, where management-only assessments by
+  smaller reporting companies fail far more often. The distress lift corroborates it.
 - **The last third of fee tables.** The 33% not read are filers who describe fees in
   prose ("Audit Fees. The aggregate fees billed by…") or transpose the table so the
   categories are column headers. Two separate small parsers, each verifiable against the

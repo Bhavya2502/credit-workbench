@@ -6,19 +6,35 @@ reporting was effective, and whether a material weakness was identified. That si
 Item 9A of the 10-K, and 116,812 of those sections are already in the lake - no fetching
 required.
 
-The obvious approach is to search for "material weakness", and it would be wrong on
-almost every filing. Item 9A carries the definition as boilerplate - "a material weakness
-is a deficiency, or a combination of deficiencies, in internal control over financial
-reporting such that there is a reasonable possibility..." - so a filer with clean controls
-still uses the phrase. This is the exact failure this project keeps meeting: a section
-that contains the words without making the statement.
+The obvious approach is to search for "material weakness", and it is unsafe: Item 9A
+carries the definition of one as boilerplate - "a material weakness is a deficiency, or a
+combination of deficiencies, in internal control over financial reporting such that there
+is a reasonable possibility..." - so a filer with clean controls still uses the phrase.
+This is the failure this project keeps meeting: a section containing the words without
+making the statement.
 
-So what gets measured here is the difference between the definition and the finding. The
+**Measured, once this ran:** 37.7% of sections mention a material weakness and 10.9%
+carry the definition. So the trap is real but smaller than assumed - the first version of
+this file claimed the boilerplate was near-universal, which the data does not support.
+The phrase still cannot be used as a finding, because a fifth to a quarter of sections
+match a loose "weakness identified" pattern against an adverse conclusion rate of 11-15%.
+
+So what gets measured is the difference between the definition and the finding. The
 conclusion sentence carries polarity - "was effective" against "was not effective" - and
 that is testable. Reported below: how often the boilerplate appears, how often a
-conclusion is found, which way it points, and whether the split is credible. Roughly
-95% of filers conclude effective in any year, so a much higher rate of "not effective"
-means the negation is being matched loosely, and a much lower one means it is being missed.
+conclusion is found, which way it points, and whether the split is credible.
+
+**The adverse rate came out at 11.3-15.1% by year, not the ~5% expected.** That is not
+the negation matching loosely: this population is all SEC filers, and management-only
+assessments by smaller reporting companies carry adverse conclusions far more often than
+accelerated filers do. Check 5 is what settles it - an adverse conclusion travels with
+56.97% distress inside 24 months against 24.79% for the rest, a lift a loose match could
+not produce. Both polarities were also read back sentence by sentence in checks 6 and 7.
+
+**The open recall gap:** 12,929 of 36,165 sections yield no conclusion at all. The likely
+cause is word order - "maintained effective internal control over financial reporting"
+puts "effective" before the subject, where both patterns here expect it after - but that
+is a hypothesis and has not been tested.
 
 Scans are restricted to a sample and to recent years: this table is 116,812 sections of
 median 4,135 characters and MotherDuck's daily compute is limited.
