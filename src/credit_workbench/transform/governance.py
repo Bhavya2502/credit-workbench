@@ -362,49 +362,52 @@ def metrics_for_filing(sections: dict[str, str], meta: dict) -> dict:
 COLUMNS = TEXT + NUMERIC + INTEGER + BOOLEAN
 
 
-BATCH = 400      # filings per read: few enough to bound memory, few enough round trips
-
-
 def build(con) -> int:
-    """Read the section view, write one row per proxy filing.
+    """Read the section view once, streaming, and write one row per proxy filing.
 
-    Sections are read a batch of filings at a time rather than one filing at a time. Per
-    filing this issued a query each, which for a single year is 4,859 round trips to
-    MotherDuck against the daily compute allowance; the whole text of a year at once
-    would be over a gigabyte held in memory. A batch is neither.
+    Read one filing at a time this issued a query each: 4,859 round trips to MotherDuck
+    for a single year, against a daily compute allowance already exhausted once on this
+    project. Batching the reads cut the round trips but not the work, because the view
+    is parquet in the lake and every `WHERE adsh IN (…)` rescans all of it - eight years
+    would have meant a hundred full scans.
+
+    So the sections are streamed once in accession order and each filing is scored as its
+    last section arrives. One scan, and only one filing's text in memory at a time.
+    Ordering is what makes that safe: sections of the same filing arrive together.
     """
-    filings = con.execute("""
-        SELECT cik, adsh, any_value(form) AS form, any_value(filing_date) AS filing_date,
-               any_value(period_of_report) AS period_of_report
+    reader = con.execute("""
+        SELECT cik, adsh, any_value(form) AS form,
+               any_value(filing_date) AS filing_date,
+               any_value(period_of_report) AS period_of_report,
+               section, any_value(text) AS text
         FROM quali.proxy_sections
-        GROUP BY cik, adsh
-        ORDER BY adsh, cik""").fetchall()
-    print(f"{len(filings):,} proxy filings to score")
+        GROUP BY cik, adsh, section
+        ORDER BY adsh, cik""").fetch_record_batch(10_000)
 
     rows: list[dict] = []
-    for start in range(0, len(filings), BATCH):
-        batch = filings[start:start + BATCH]
-        keys = {(str(f[0]), str(f[1])) for f in batch}
-        placeholders = ", ".join(["?"] * len(batch))
-        # One read per batch, keyed on the accession numbers in it. A co-registrant
-        # filing shares an accession, so the CIK is carried through and matched too -
-        # without that a parent would be scored on its subsidiary's sections as well.
-        got = con.execute(f"""
-            SELECT cik, adsh, section, text FROM quali.proxy_sections
-            WHERE adsh IN ({placeholders})""",
-                          [str(f[1]) for f in batch]).fetchall()
-        per_filing: dict[tuple[str, str], dict[str, str]] = {}
-        for cik, adsh, section, text in got:
-            key = (str(cik), str(adsh))
-            if key in keys:
-                per_filing.setdefault(key, {})[section] = text
+    cur_key: tuple[str, str] | None = None
+    cur_meta: dict = {}
+    cur_secs: dict[str, str] = {}
 
-        for cik, adsh, form, filed, period in batch:
-            secs = per_filing.get((str(cik), str(adsh)), {})
-            rows.append(metrics_for_filing(secs, {
-                "cik": str(cik), "adsh": str(adsh), "form": form,
-                "filing_date": str(filed), "period_of_report": str(period)}))
-        print(f"  scored {len(rows):,} of {len(filings):,}")
+    def flush() -> None:
+        if cur_key is not None:
+            rows.append(metrics_for_filing(cur_secs, cur_meta))
+            if len(rows) % 2000 == 0:
+                print(f"  scored {len(rows):,}")
+
+    for batch in reader:
+        d = batch.to_pydict()
+        for i in range(batch.num_rows):
+            key = (str(d["cik"][i]), str(d["adsh"][i]))
+            if key != cur_key:
+                flush()
+                cur_key, cur_secs = key, {}
+                cur_meta = {"cik": key[0], "adsh": key[1], "form": d["form"][i],
+                            "filing_date": str(d["filing_date"][i]),
+                            "period_of_report": str(d["period_of_report"][i])}
+            cur_secs[d["section"][i]] = d["text"][i]
+    flush()
+    print(f"{len(rows):,} proxy filings scored")
 
     con.execute("CREATE SCHEMA IF NOT EXISTS marts")
     con.execute("DROP TABLE IF EXISTS marts.governance_metrics")
