@@ -421,17 +421,23 @@ COLUMNS = TEXT + NUMERIC + INTEGER + BOOLEAN
 
 
 def build(con, rebuild: bool = False) -> int:
-    """Read the section view once, streaming, and write one row per proxy filing.
+    """Read the section view a filing year at a time, one mart row per proxy filing.
 
-    Read one filing at a time this issued a query each: 4,859 round trips to MotherDuck
-    for a single year, against a daily compute allowance already exhausted once on this
-    project. Batching the reads cut the round trips but not the work, because the view
-    is parquet in the lake and every `WHERE adsh IN (…)` rescans all of it - eight years
-    would have meant a hundred full scans.
+    Three shapes were tried and the first two were wrong in instructive ways. A query per
+    filing meant 4,859 round trips for a single year, against a daily compute allowance
+    this project has already exhausted once. Batching by accession cut the round trips
+    but not the work, because the view is parquet in the lake and every
+    `WHERE adsh IN (…)` rescans all of it.
 
-    So the sections are streamed once in accession order and each filing is scored as its
-    last section arrives. One scan, and only one filing's text in memory at a time.
-    Ordering is what makes that safe: sections of the same filing arrive together.
+    Reading everything in one grouped, ordered statement then ran MotherDuck out of
+    memory outright: grouping and sorting both have to materialise the `text` column,
+    1.7GB across 488,146 sections, on an instance with about a gigabyte. The lesson is
+    that the expensive work belongs on the runner, which has memory to spare, and the
+    warehouse should be asked only to hand over rows.
+
+    So each year is read unsorted and ungrouped, assembled here, and scored. Filings
+    already in the mart are skipped and rows commit in batches, so an interrupted run
+    resumes instead of restarting.
     """
     con.execute("CREATE SCHEMA IF NOT EXISTS marts")
     cols = ", ".join(
@@ -454,22 +460,10 @@ def build(con, rebuild: bool = False) -> int:
     if done:
         print(f"{len(done):,} filings already scored, skipping them")
 
-    reader = con.execute("""
-        SELECT cik, adsh, any_value(form) AS form,
-               any_value(filing_date) AS filing_date,
-               any_value(period_of_report) AS period_of_report,
-               section, any_value(text) AS text
-        FROM quali.proxy_sections
-        GROUP BY cik, adsh, section
-        ORDER BY adsh, cik""").fetch_record_batch(10_000)
-
     insert = (f"INSERT INTO marts.governance_metrics "
               f"VALUES ({', '.join(['?'] * len(COLUMNS))})")
     buf: list[dict] = []
-    scored = skipped = 0
-    cur_key: tuple[str, str] | None = None
-    cur_meta: dict = {}
-    cur_secs: dict[str, str] = {}
+    scored = 0
 
     def commit() -> None:
         """Write the buffer out, so an interrupted run keeps what it has done."""
@@ -477,36 +471,55 @@ def build(con, rebuild: bool = False) -> int:
             con.executemany(insert, [[r.get(c) for c in COLUMNS] for r in buf])
             buf.clear()
 
-    def flush() -> None:
-        nonlocal scored, skipped
-        if cur_key is None:
-            return
-        if cur_key in done:
-            skipped += 1
-            return
-        buf.append(metrics_for_filing(cur_secs, cur_meta))
-        scored += 1
-        if len(buf) >= 2000:
-            commit()
-            print(f"  scored {scored:,}")
+    # One filing year per query, and no sort or grouping asked of the warehouse.
+    #
+    # Reading the lot in one statement, grouped by (cik, adsh, section) and ordered by
+    # accession, ran MotherDuck out of memory: both operators have to materialise the
+    # `text` column, which is 1.7GB across 488,146 sections, and the free instance has
+    # about a gigabyte. The grouping was redundant anyway - invariant 3 proves that
+    # triple is already unique - and the ordering existed only so filings arrived
+    # together, which is cheaper to arrange here than there.
+    #
+    # So each year is read unsorted and assembled in the runner, which has the memory to
+    # spare: a year of unscored sections is roughly 230MB. Years also give the run a
+    # coarse resume point on top of the per-filing one.
+    years = [r[0] for r in con.execute(
+        "SELECT DISTINCT filing_year FROM quali.proxy_sections "
+        "ORDER BY filing_year").fetchall()]
+    print(f"filing years present: {', '.join(str(y) for y in years)}")
 
-    for batch in reader:
-        d = batch.to_pydict()
-        for i in range(batch.num_rows):
-            key = (str(d["cik"][i]), str(d["adsh"][i]))
-            if key != cur_key:
-                flush()
-                cur_key, cur_secs = key, {}
-                cur_meta = {"cik": key[0], "adsh": key[1], "form": d["form"][i],
-                            "filing_date": str(d["filing_date"][i]),
-                            "period_of_report": str(d["period_of_report"][i])}
-            if key not in done:          # no point holding text we will not score
-                cur_secs[d["section"][i]] = d["text"][i]
-    flush()
-    commit()
+    for year in years:
+        reader = con.execute("""
+            SELECT cik, adsh, form, filing_date, period_of_report, section, text
+            FROM quali.proxy_sections
+            WHERE filing_year = ?""", [year]).fetch_record_batch(5_000)
+        secs_by_filing: dict[tuple[str, str], dict[str, str]] = {}
+        meta_by_filing: dict[tuple[str, str], dict] = {}
+        for batch in reader:
+            d = batch.to_pydict()
+            for i in range(batch.num_rows):
+                key = (str(d["cik"][i]), str(d["adsh"][i]))
+                if key in done:
+                    continue
+                if key not in meta_by_filing:
+                    meta_by_filing[key] = {
+                        "cik": key[0], "adsh": key[1], "form": d["form"][i],
+                        "filing_date": str(d["filing_date"][i]),
+                        "period_of_report": str(d["period_of_report"][i])}
+                secs_by_filing.setdefault(key, {})[d["section"][i]] = d["text"][i]
+
+        for key, secs in secs_by_filing.items():
+            buf.append(metrics_for_filing(secs, meta_by_filing[key]))
+            scored += 1
+            if len(buf) >= 2000:
+                commit()
+        commit()
+        print(f"  {year}: scored {len(secs_by_filing):,}  (running total {scored:,})")
+        secs_by_filing.clear()
+        meta_by_filing.clear()
 
     n = con.execute("SELECT count(*) FROM marts.governance_metrics").fetchone()[0]
-    print(f"{scored:,} filings scored this run, {skipped:,} already present")
+    print(f"{scored:,} filings scored this run, {len(done):,} already present")
     print(f"table marts.governance_metrics  {n:,} rows")
     return n
 
