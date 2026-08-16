@@ -1,4 +1,4 @@
-# Session state — 15 August 2026
+# Session state — 16 August 2026
 
 Where the project stands, what was just done, and what to pick up. Read this first, then
 `DATA_GUIDE.md` if you need to query, `decisions.md` for why things are the way they are.
@@ -22,6 +22,53 @@ what remains). Ask the owner for the artifact links.
 ---
 
 ## Just completed
+
+**The proxy / governance gap (G3) is built and validated, but not yet backfilled.**
+Code is on `main`; nothing has been fetched into the lake yet. Run it with:
+
+```bash
+gh workflow run ingest_proxy.yml -f parts=sections -f years=2019-2026
+gh workflow run ingest_proxy.yml -f parts=register
+gh workflow run ingest_proxy.yml -f parts=metrics
+```
+
+`sections_dry` first if anything in the splitter changed. The `metrics` job reads stored
+text, so the extractor can be corrected and re-run without re-fetching from SEC.
+
+What was found, in the order it mattered:
+
+- **There is no governance XBRL to reuse.** `AuditorName`, `IcfrAuditorAttestationFlag`,
+  `DocumentFinStmtErrorCorrectionFlag` and the Item 402(v) tags return *nothing* from
+  `staging.facts_pit` — they are `dei` and `ecd` tags and we hold numeric
+  financial-statement facts. The only auditor tags present are 926 IFRS
+  `AuditorsRemuneration*` facts from foreign filers.
+- **The 10-K does not help either.** Items 10–14 exist but run 432–1,910 characters at
+  the median: they are the "incorporated by reference to our Proxy Statement" stubs.
+- **208,038 DEF 14A are indexed, 165,078 with a primary document, 1994–2026. 6,809 of
+  those filers also have financials** — the universe a scorecard can use.
+  `--with-financials` restricts to it.
+- **The 10-K splitter could not be reused.** Schedule 14A imposes no Item numbering, and
+  no single proxy heading is universal — the most common, "audit committee report",
+  appears in 28%. Sections are matched on *families* of phrasings instead, measured at
+  75–92% per document, and a median of 13 of 20 sections is recovered per filing.
+- **The converter was the real obstacle.** `to_text` puts every table cell on its own
+  line, which separated each fee label from its number: 35% of filings had them on one
+  line. `common.html_text.to_rows` keeps rows intact and takes that to 80%, at no cost in
+  size. Everything numeric in a proxy is a table, so this was the whole problem.
+
+**Two things are deliberately conservative, and should stay that way.**
+
+Board independence is **not** extracted from prose. The clean phrasing appears in 2% of
+proxies; a looser pattern fired on 75% and was matching sentences like "acting as a
+liaison between the independent directors" — a count with no count in it. It comes from
+the director table (38% of filings) and is `NULL` otherwise, with the sentence kept
+alongside as evidence. **Do not coalesce that `NULL` to zero.**
+
+The fee reader was wrong on 16 of 40 filings before it was region-scoped — reporting a
+total of 11 against a table stating 2,017, and once lifting 4,011,243 from the Rule 0-11
+cover-page filing fee. Requiring two of the four Item 9(e) categories inside one
+contiguous block fixed it: 96% of filings with a stated total now tie to it. See
+`docs/DATA_GUIDE.md` §10 for the full coverage table — **read it before scoring.**
 
 **Segments and concentration gained vintage flags.** They were the only fact marts
 without `is_latest`, so a naive sum counted every restatement — Intel's FY2024 Client
@@ -61,13 +108,28 @@ The 140 data-derived groups work as a default meanwhile.
 Needs the Census SIC→NAICS concordance, a separate fetch. Only worth doing if something
 actually requires NAICS — the SIC hierarchy above may be enough for cyclicality grouping.
 
-### 3. Gaps the other session identified, all confirmed genuine
+### 3. Gaps the other session identified
 | Gap | Size | Note |
 |---|---|---|
-| Proxy / DEF 14A (G3) | large | ~100k filings. Reuse `ingest/filing_sections.py` — same shape as the 10-K extractor |
+| Proxy / DEF 14A (G3) | **built, needs backfill** | Code on `main`, validated on 60 live filings. Run `ingest_proxy.yml` as above |
 | Macro / FRED (I2) | small | Free API key; a few series for GDP-β |
 | Agency adjustments (D2–D4) | medium | Owner parked these. All 106 input columns exist in `marts.adjustment_inputs`; only the arithmetic is missing |
 | Feature store (L1) | medium | The bridge to any scoring work; forces point-in-time discipline into one place |
+
+### 4. Governance work worth doing next, in value order
+- **The controls pillar is still thin.** The proxy gives auditor independence, but the
+  strongest control signal is a material weakness in ICFR, and that sits in
+  `quali.filing_sections` item `9A` — 116,812 sections already in the lake, unparsed.
+  A flag for "material weakness" plus "not effective" is cheap and would complete the
+  fourth scorecard pillar without any fetching.
+- **The last third of fee tables.** The 33% not read are filers who describe fees in
+  prose ("Audit Fees. The aggregate fees billed by…") or transpose the table so the
+  categories are column headers. Two separate small parsers, each verifiable against the
+  same tie-to-stated-total property.
+- **Director tables at 38%.** The remainder present directors as biography blocks with the
+  name as a heading rather than as a table. That is a different extractor, not a tweak.
+- **Say-on-pay support levels** come from 8-K item 5.07, not the proxy — a real governance
+  signal and `marts.credit_events` already ingests 8-Ks.
 
 ---
 

@@ -77,6 +77,11 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.governance_metrics""",
      "rows == distinct_pairs and rows == source"),
 
+    # Measured at 96% on a 60-filing trial, against 27% for the first reader. The floor
+    # is set at 90 so this fails on a regression of that kind rather than on one extra
+    # awkward filer - the residual misses are blocks that name all four categories in a
+    # table that is not the fee table, and there is no better block in those documents
+    # to prefer. `fee_source_section` is stored so those can be filtered downstream.
     ("the fee components sum to the total the filer stated",
      """SELECT count(*) AS both_present,
                round(100.0 * count(*) FILTER (
@@ -86,7 +91,7 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.governance_metrics
         WHERE fee_components_sum IS NOT NULL AND total_fees_stated IS NOT NULL
           AND total_fees_stated > 0""",
-     "both_present > 100 and pct_tying > 95"),
+     "both_present > 100 and pct_tying > 90"),
 
     ("audit fees are a plausible size for an audited registrant",
      """SELECT count(*) AS n, round(median(audit_fees), 0) AS median_audit,
@@ -124,6 +129,10 @@ CHECKS: list[tuple[str, str, str]] = [
           AND directors_marked_independent IS NOT NULL""",
      "impossible == 0"),
 
+    # A median of 6 was measured over a random sample of all proxy filers, which is
+    # dominated by small registrants; an S&P 500 sample would sit nearer eleven. The
+    # earlier reader returned a median of 4 by accepting officer and committee tables as
+    # boards, which is what this check was written to catch.
     ("boards are a plausible size where a table was found",
      """SELECT count(*) AS n, round(median(directors_listed), 0) AS median_directors,
                count(*) FILTER (WHERE directors_listed > 30) AS over_30

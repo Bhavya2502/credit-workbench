@@ -351,9 +351,13 @@ Plan around these — they do not exist:
 
 agency adjustments (inputs only, no adjusted debt/EBITDA/FFO) · credit ratings and rating
 histories · macro series and CCAR/DFAST scenario paths · projections or forecasts ·
-feature store or fitted model · proxy statement / governance data · Census QFR, Damodaran
-or ratio-by-rating benchmarks · SIC–NAICS crosswalk · non-US filers (IFRS appears only via
-20-F)
+feature store or fitted model · Census QFR, Damodaran or ratio-by-rating benchmarks ·
+SIC–NAICS crosswalk · non-US filers (IFRS appears only via 20-F)
+
+Governance data now exists — see §11 — but read the coverage table there before scoring
+on it. There is no `AuditorName`, ICFR attestation flag or Item 402(v) tag anywhere in
+`staging.facts_pit`: those are `dei` and `ecd` tags, and the warehouse holds numeric
+financial-statement facts. Everything governance is read out of the proxy text.
 
 ---
 
@@ -386,7 +390,71 @@ UNION ALL SELECT 'risk factors', count(*) FROM quali.risk_factors WHERE cik='000
 
 ---
 
-## 10. Regenerating this
+## 10. Governance and the Management Risk scorecard (tracker G3)
+
+`quali.proxy_sections` holds DEF 14A text split into named governance sections, and
+`marts.governance_metrics` holds one narrow row per proxy filing with the numbers read out
+of it. Named views: `quali.proxy_governance`, `proxy_independence`, `proxy_related_party`,
+`proxy_audit_fees`, `proxy_compensation`, `proxy_committees`.
+
+**`quali.proxy_sections`** — `cik, adsh, form, filing_date, period_of_report, section,
+section_title, char_len, text`. 20 sections; a median of 13 are found per filing.
+`section` ∈ `governance, independence, committees, risk_oversight, attendance, nominees,
+related_party, audit_fees, audit_report, cda, summary_comp, director_comp, pay_ratio,
+pay_vs_perf, ownership, section16, equity_plan, say_on_pay, clawback, hedging`.
+
+Unlike `quali.filing_sections`, **this text keeps table rows on one line**, cells joined
+by ` | `. That is deliberate: the fee, director and compensation tables are only readable
+while a label still sits beside its number. Any parser you write over this text should
+split lines on `|`.
+
+**`marts.governance_metrics`** — `audit_fees, audit_related_fees, tax_fees, other_fees,
+total_fees_stated, fee_components_sum, non_audit_fee_ratio, fee_units,
+fee_source_section, directors_listed, directors_marked_independent,
+independence_statement, ceo_pay_ratio, related_party_chars, related_party_none_stated,
+related_party_max_amount, sections_found`, plus `has_clawback_policy, has_hedging_policy,
+has_say_on_pay, has_pay_vs_performance, has_cda, has_section16_disclosure`.
+
+### Coverage, measured on a 60-filing sample — read this before scoring
+
+| Metric | Fires on | Trust |
+|---|---|---|
+| audit fee figure, non-audit ratio | 67% | high — 96% of filings with a stated total tie to it |
+| all four fee categories | 48% | high |
+| related-party section | 75% | high as text; the dollar figure is the largest in the section, not a total |
+| CEO pay ratio | 42% | good — bounded to 1…10,000 |
+| section flags (`has_*`) | 38–75% | presence of the section, not the substance of the policy |
+| director table | 38% | moderate — median board 6, floor of 4 directors |
+| `directors_marked_independent` | 10% | only where the table has an independence column |
+| `independence_statement` | 57% | evidence text for a human or LLM pass, **not a count** |
+
+**Board independence is deliberately not a number.** The clean phrasing — "X of our Y
+directors are independent" — appears in 2% of proxies, and a looser pattern matched prose
+like "acting as a liaison between the independent directors", a count with no count in it.
+So it is read from the director table where there is one and left `NULL` where there is
+not. A `NULL` means "not stated in a form we can trust". Do not coalesce it to zero.
+
+**Fees are found by the table's shape, not its heading** — the fee table sits under
+"Ratification of Appointment…" as often as under a fee heading, so `fee_source_section`
+records where it was actually found. The 33% not found are filers who describe fees in
+prose, or who transpose the table so the categories are column headers.
+
+`fee_units` records whether the table was stated in dollars, thousands or millions; the
+stored figures are already scaled to dollars.
+
+```sql
+-- auditor independence: non-audit fees as a share of audit fees, weakest first
+SELECT g.cik, g.filing_date, g.audit_fees, g.non_audit_fee_ratio,
+       g.directors_listed, g.related_party_none_stated
+FROM marts.governance_metrics g
+WHERE g.non_audit_fee_ratio IS NOT NULL AND g.audit_fees > 0
+ORDER BY g.non_audit_fee_ratio DESC
+LIMIT 25;
+```
+
+---
+
+## 11. Regenerating this
 
 Row counts move as backfills land. These run against the warehouse without anything
 landing locally:
