@@ -338,13 +338,31 @@ def main() -> None:
           {financials}
         ORDER BY {order}
         {f'LIMIT {args.limit}' if args.limit else ''}""").fetchall()
-    print(f"{len(filings):,} proxies to fetch for {args.years} ({', '.join(forms)})"
+    print(f"{len(filings):,} proxies indexed for {args.years} ({', '.join(forms)})"
           f"{' — filers with financials only' if args.with_financials else ''}")
     if not filings:
         return
 
     if args.dry_run:
         dry_run(filings)
+        return
+
+    # Skip filings already in the lake, whichever run put them there. Without this a
+    # trial year followed by a wider range writes the same filings into two partitions
+    # and the view counts every section twice - the fan-out this project has met three
+    # times already. The invariant suite would catch it; not creating it is better.
+    try:
+        done = {r[0] for r in con.execute(
+            "SELECT DISTINCT adsh FROM quali.proxy_sections").fetchall()}
+    except Exception:  # noqa: BLE001  view absent on the first run
+        done = set()
+    if done:
+        before = len(filings)
+        filings = [f for f in filings if str(f[1]) not in done]
+        print(f"  {before - len(filings):,} already in the lake, "
+              f"{len(filings):,} to fetch")
+    if not filings:
+        print("nothing left to fetch")
         return
 
     cfg = R2.from_env()
@@ -356,25 +374,35 @@ def main() -> None:
         for start in range(0, len(filings), CHUNK):
             chunk = filings[start:start + CHUNK]
             index = start // CHUNK
-            key = f"{PREFIX}/filing_year={lo}_{hi}/proxy_{index:05d}.parquet"
-            if r2util.exists(s3, cfg.bucket, key):
-                print(f"  chunk {index:>4}  already present, skipping")
-                continue
-
             rows = asyncio.run(run_chunk(chunk))
             if not rows:
                 print(f"  chunk {index:>4}  no sections from {len(chunk)} filings")
                 continue
 
-            path = Path(tmp) / f"proxy_{index:05d}.parquet"
-            cols = list(zip(*rows))
-            table = pa.table({
-                name: pa.array(col, type=pa.int64() if name == "char_len"
-                               else pa.string())
-                for name, col in zip(FIELDS, cols)})
-            pq.write_table(table, path, compression="zstd")
-            size = r2util.upload(s3, path, cfg.bucket, key)
-            path.unlink()
+            # Partition by each row's own filing year rather than by the range asked
+            # for, so a partition means what its name says and two runs over different
+            # ranges cannot disagree about where a year lives. The file is named after
+            # the first accession it holds, which makes the key deterministic and stops
+            # a later run's chunk 0 overwriting an earlier one's.
+            by_year: dict[str, list] = {}
+            for r in rows:
+                by_year.setdefault(str(r[3])[:4] or "unknown", []).append(r)
+
+            written = 0
+            for year, part in sorted(by_year.items()):
+                key = f"{PREFIX}/filing_year={year}/proxy_{part[0][1]}.parquet"
+                if r2util.exists(s3, cfg.bucket, key):
+                    continue
+                path = Path(tmp) / f"proxy_{part[0][1]}.parquet"
+                cols = list(zip(*part))
+                table = pa.table({
+                    name: pa.array(col, type=pa.int64() if name == "char_len"
+                                   else pa.string())
+                    for name, col in zip(FIELDS, cols)})
+                pq.write_table(table, path, compression="zstd")
+                written += r2util.upload(s3, path, cfg.bucket, key)
+                path.unlink()
+            size = written
 
             done_rows += len(rows)
             elapsed = time.time() - started
