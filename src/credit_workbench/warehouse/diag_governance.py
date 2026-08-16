@@ -210,8 +210,11 @@ async def fetch(client, limiter, sem, row):
                 await asyncio.sleep(2 * (attempt + 1))
                 continue
             if resp.status_code == 200:
+                # The raw markup is kept so a second probe can compare converters on
+                # exactly these documents without fetching them from SEC again.
                 return {"adsh": str(adsh), "cik": str(cik), "url": url,
-                        "raw": len(resp.text), "text": to_text(resp.text)}
+                        "raw": len(resp.text), "_html": resp.text,
+                        "text": to_text(resp.text)}
             if resp.status_code in (403, 429, 500, 502, 503):
                 await asyncio.sleep(3 * (attempt + 1))
                 continue
