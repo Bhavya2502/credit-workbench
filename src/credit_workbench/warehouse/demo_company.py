@@ -3,8 +3,12 @@
     uv run python -m credit_workbench.warehouse.demo_company --ticker PFE
 
 Prints the entity record, filing history, headline financials, a note-level extract
-(leases, debt, pensions), segment disclosures and recent 8-K credit events: the raw
-material a credit analyst spreads, adjusts and benchmarks.
+(leases, debt, pensions), segment disclosures, recent 8-K credit events and the proxy
+governance inputs: the raw material a credit analyst spreads, adjusts and benchmarks.
+
+Nulls in the governance block are shown rather than filled. A board size of NULL means
+no director table was found in that proxy, which is not a board of nobody - see
+`DATA_GUIDE.md` section 10 for what each governance metric covers.
 """
 from __future__ import annotations
 
@@ -138,6 +142,42 @@ def main() -> None:
         FROM ref.filing_index
         WHERE TRY_CAST(cik AS BIGINT) = {cik} AND form LIKE '8-K%' AND items IS NOT NULL
         ORDER BY filing_date DESC LIMIT 10""")
+
+    # Governance (G3). Nulls here are meaningful and are shown as nulls: a board size of
+    # NULL means no director table was found, not a board of nobody.
+    section("Management Risk inputs from the proxy (G3)")
+    show(con, f"""
+        SELECT filing_date,
+               round(audit_fees / 1e6, 2) AS audit_fees_mm,
+               round(non_audit_fee_ratio, 3) AS non_audit_ratio,
+               fee_units, fee_units_overridden,
+               directors_listed AS board_size,
+               directors_marked_independent AS marked_indep,
+               ceo_pay_ratio,
+               related_party_none_stated AS no_related_party,
+               has_clawback_policy AS clawback, has_hedging_policy AS hedging
+        FROM marts.governance_metrics
+        WHERE TRY_CAST(cik AS BIGINT) = {cik}
+        ORDER BY filing_date DESC LIMIT 8""")
+
+    section("Governance sections held, most recent proxy")
+    show(con, f"""
+        WITH latest AS (
+            SELECT adsh FROM quali.proxy_sections
+            WHERE TRY_CAST(cik AS BIGINT) = {cik}
+            ORDER BY filing_date DESC LIMIT 1)
+        SELECT s.section, s.section_title, s.char_len
+        FROM quali.proxy_sections s JOIN latest l USING (adsh)
+        WHERE TRY_CAST(s.cik AS BIGINT) = {cik}
+        ORDER BY s.char_len DESC""")
+
+    section("What the proxy says about board independence (evidence, not a count)")
+    show(con, f"""
+        SELECT filing_date, substr(independence_statement, 1, 200) AS statement
+        FROM marts.governance_metrics
+        WHERE TRY_CAST(cik AS BIGINT) = {cik}
+          AND independence_statement IS NOT NULL
+        ORDER BY filing_date DESC LIMIT 3""")
 
 
 if __name__ == "__main__":
