@@ -135,13 +135,29 @@ def _block(marks, lines) -> dict:
             "units": (unit.group(1).lower() if unit else "dollars")}
 
 
+def block_ties(b: dict) -> bool:
+    """Do the block's own components sum to the total printed in the same block?"""
+    parts = [b["found"].get(c) for c in COMPONENTS]
+    total = b["found"].get("total")
+    if not total or any(p is None for p in parts):
+        return False
+    return abs(sum(parts) - total) <= max(1.0, 0.005 * total)
+
+
 def best_fee_block(text: str) -> dict | None:
-    """The block naming the most categories; on a tie, the one stating a total."""
+    """The block naming the most categories, preferring one that adds up.
+
+    Internal consistency is the tie-breaker because a competing block can name all four
+    categories and still be the wrong table - one sampled filing had a block in its
+    related-party section whose parts came to 2,225,756 against a stated 1,000,000.
+    A table whose own arithmetic works is the fee table; the other one is a coincidence.
+    """
     blocks = fee_blocks(text)
     if not blocks:
         return None
     return max(blocks, key=lambda b: (len(set(b["found"]) & set(COMPONENTS)),
-                                      "total" in b["found"], b["labels"]))
+                                      block_ties(b), "total" in b["found"],
+                                      b["labels"]))
 
 
 SCALE = {"dollars": 1.0, "thousands": 1_000.0, "millions": 1_000_000.0}
@@ -308,15 +324,18 @@ def metrics_for_filing(sections: dict[str, str], meta: dict) -> dict:
     for flag, name in FLAG_SECTIONS.items():
         row[flag] = name in sections
 
-    # Fees: search every section, because the table is often not under a fee heading.
-    best: tuple[int, str, dict] | None = None
+    # Fees: search every section, because the table is often not under a fee heading -
+    # it lands under "Ratification of Appointment" as often as not. The same preference
+    # for a block that adds up applies across sections as within one.
+    best: tuple[tuple, str] | None = None
     for name, body in sections.items():
         b = best_fee_block(body)
         if not b:
             continue
-        score = len(set(b["found"]) & set(COMPONENTS))
+        score = (len(set(b["found"]) & set(COMPONENTS)), block_ties(b),
+                 "total" in b["found"])
         if best is None or score > best[0]:
-            best = (score, name, b)
+            best = (score, name)
     if best:
         row.update(fees(sections[best[1]]))
         row["fee_source_section"] = best[1]
