@@ -173,13 +173,45 @@ def fees(text: str) -> dict:
 # attributes is what separates it from any other table with a "Name" column.
 DIR_HEADER_KEYS = (r"\bage\b", r"director\s+since|since\b|year\s+first",
                    r"\bindependent\b", r"committee", r"occupation|position|principal")
-NAME_RE = re.compile(r"^[A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+){1,3}"
-                     r"(?:,?\s+(?:Jr|Sr|II|III|IV|Ph\.?D|M\.?D)\.?)?$")
-INDEP_CELL = re.compile(r"^(yes|independent|x|✓|●|•)$", re.IGNORECASE)
+
+# Requiring the whole cell to be a name rejected most real director rows, because filers
+# pack the row into one cell: "Paul J. Bickel III Age 65 Director since 2017",
+# "Thomas I. Vehrs (3) Colorado, USA Director", "Michael R. Egeck CEO, Leslie's, Inc.".
+# So only the first two tokens are tested, and a stop list keeps phrases that begin with
+# capitals - "Compensation Committee of Independent Directors" - from reading as a person.
+TOKEN = re.compile(r"^[A-Z][A-Za-z.'’\-]+$")
+INITIAL = re.compile(r"^[A-Z]\.$|^\([^)]{1,15}\)$")   # "J." or a ("Jay") nickname
+NOT_A_NAME = {
+    "name", "names", "director", "directors", "nominee", "nominees", "independent",
+    "board", "committee", "committees", "total", "audit", "compensation", "nominating",
+    "corporate", "governance", "executive", "chief", "shares", "share", "common",
+    "class", "all", "other", "tax", "fee", "fees", "number", "amount", "year", "age",
+    "summary", "equity", "option", "options", "award", "awards", "stock", "non",
+    "named", "our", "the", "company", "annual", "report", "proposal", "meeting",
+    "aggregate", "principal", "lead", "chair", "chairman", "position", "occupation",
+    "percent", "percentage", "fiscal", "period", "title", "age(1)", "beneficial",
+}
+POSITIVE_INDEP = re.compile(r"^(yes|independent)$", re.IGNORECASE)
+MIN_DIRECTORS = 4       # below this a match is usually a committee or officer table
+
+
+def looks_like_person(cell: str) -> bool:
+    parts = cell.replace(",", " ").split()
+    if len(parts) < 2:
+        return False
+    first, second = parts[0], parts[1]
+    if first.lower() in NOT_A_NAME or second.lower().strip(".") in NOT_A_NAME:
+        return False
+    return bool(TOKEN.match(first)) and bool(TOKEN.match(second) or INITIAL.match(second))
 
 
 def director_table(text: str) -> dict:
-    """Count directors and those marked independent, from a header-anchored table."""
+    """Count directors and those marked independent, from a header-anchored table.
+
+    The independence count is only taken when the header actually carries an
+    independence column. Without that guard a committee-membership bullet would read as
+    an independence mark, and a committee matrix is the table most likely to sit here.
+    """
     lines = text.split("\n")
     best: dict = {}
     for i, line in enumerate(lines):
@@ -198,15 +230,14 @@ def director_table(text: str) -> dict:
                     break
                 continue
             cells = [c.strip() for c in nxt.split("|")]
-            if not NAME_RE.match(cells[0]):
+            if not looks_like_person(cells[0]):
                 if listed:
                     break
                 continue
             listed += 1
-            if any(INDEP_CELL.match(c) for c in cells[1:]) or \
-                    any("independent" in c.lower() for c in cells[1:]):
+            if has_indep_col and any(POSITIVE_INDEP.match(c) for c in cells[1:]):
                 marked += 1
-        if listed >= 3 and listed > best.get("directors_listed", 0):
+        if listed >= MIN_DIRECTORS and listed > best.get("directors_listed", 0):
             best = {"directors_listed": listed,
                     "directors_marked_independent": marked if has_indep_col else None}
     return best
@@ -290,11 +321,12 @@ def metrics_for_filing(sections: dict[str, str], meta: dict) -> dict:
         row.update(fees(sections[best[1]]))
         row["fee_source_section"] = best[1]
 
-    # Directors: the nominee and governance sections are where the table sits, but
-    # nothing is lost by looking wider - the best table wins.
-    for name in ("nominees", "governance", "independence", "committees"):
-        found = director_table(sections.get(name, ""))
-        if found.get("directors_listed", 0) > row.get("directors_listed", 0):
+    # Directors: every section, for the same reason as the fees. Restricting this to the
+    # nominee and governance sections found a table in 18% of filings where 62% have one,
+    # because which heading won the table's part of the document varies by filer.
+    for body in sections.values():
+        found = director_table(body)
+        if found.get("directors_listed", 0) > (row.get("directors_listed") or 0):
             row.update(found)
 
     for name in ("independence", "governance"):
