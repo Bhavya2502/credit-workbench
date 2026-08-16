@@ -23,127 +23,14 @@ from __future__ import annotations
 
 import asyncio
 import re
-from html.parser import HTMLParser
 
 import duckdb
 
 from credit_workbench.common.config import motherduck_token
-from credit_workbench.ingest.filing_sections import to_text
+from credit_workbench.common.html_text import to_rows
 from credit_workbench.warehouse.diag_governance import fetch_all
 
 SAMPLE = 40
-
-# Zero-width and non-breaking characters are used as spacers inside filing tables. Left
-# in, they make a cell look non-empty and defeat every "is this cell blank" test.
-INVISIBLE = dict.fromkeys(map(ord, "​‌‍⁠﻿­"), None)
-
-
-class RowExtractor(HTMLParser):
-    """Strip tags, but emit each table row as one line with cells separated by ' | '.
-
-    Nested tables are everywhere in filings, used for layout rather than data, so rows
-    are kept on a stack and a nested row is flushed into the cell that contains it.
-    """
-
-    BLOCK = {"p", "div", "br", "li", "h1", "h2", "h3", "h4", "h5", "h6"}
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.out: list[str] = []
-        self.skip = 0
-        self.depth = 0                 # table nesting depth
-        self.cells: list[list[str]] = []   # one list of finished cells per open row
-        self.buf: list[str] = []           # text of the cell being read
-
-    # -- helpers
-    def _emit(self, s: str) -> None:
-        if self.depth:
-            self.buf.append(s)
-        else:
-            self.out.append(s)
-
-    def _close_cell(self) -> None:
-        text = clean("".join(self.buf))
-        self.buf = []
-        if not self.cells:
-            # Text inside a table but outside any row belongs to no cell. Keeping it
-            # rather than dropping it stops a caption disappearing.
-            if text:
-                self.out.append("\n" + text + "\n")
-            return
-        self.cells[-1].append(text)
-
-    def _close_row(self) -> None:
-        """Every row becomes its own line, at whatever nesting level it sits.
-
-        Folding a nested row into the cell that contains it seemed tidier and was
-        wrong: filings wrap the real data table in a layout table, so folding inwards
-        collapsed an entire fee table onto one line. A layout row contributes nothing
-        here because its only cell holds the inner table, whose rows have already been
-        emitted.
-        """
-        if not self.cells:
-            return
-        self._close_cell()
-        line = " | ".join(c for c in self.cells.pop() if c)
-        if line:
-            self.out.append("\n" + line + "\n")
-
-    # -- parser interface
-    def handle_starttag(self, tag: str, attrs) -> None:  # noqa: ANN001
-        if tag in ("script", "style"):
-            self.skip += 1
-        elif tag == "table":
-            self.depth += 1
-        elif tag == "tr":
-            # At most one row may be open per nesting level. More than that means the
-            # previous `</tr>` was omitted, which is common enough to handle.
-            if len(self.cells) >= max(self.depth, 1):
-                self._close_row()
-            self.cells.append([])
-        elif tag in ("td", "th"):
-            self._close_cell()
-        elif tag in self.BLOCK:
-            self._emit("\n")
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in ("script", "style") and self.skip:
-            self.skip -= 1
-        elif tag == "table":
-            while len(self.cells) >= max(self.depth, 1):
-                self._close_row()
-            self.depth = max(0, self.depth - 1)
-        elif tag == "tr":
-            self._close_row()
-        elif tag in ("td", "th"):
-            self._close_cell()
-        elif tag in self.BLOCK:
-            self._emit("\n")
-
-    def handle_data(self, data: str) -> None:
-        if not self.skip:
-            self._emit(data)
-
-    def text(self) -> str:
-        while self.cells:
-            self._close_row()
-        out = "".join(self.out).translate(INVISIBLE).replace("\xa0", " ")
-        out = re.sub(r"[ \t]+", " ", out)
-        out = re.sub(r" *\| *(\| *)+", " | ", out)      # collapse runs of empty cells
-        return re.sub(r"\n\s*\n+", "\n", out).strip()
-
-
-def clean(s: str) -> str:
-    return re.sub(r"\s+", " ", s.translate(INVISIBLE).replace("\xa0", " ")).strip()
-
-
-def to_rows(html: str) -> str:
-    p = RowExtractor()
-    try:
-        p.feed(html)
-    except Exception:  # noqa: BLE001  malformed markup: keep whatever parsed
-        pass
-    return p.text()
 
 
 # ---------------------------------------------------------------- fee extraction

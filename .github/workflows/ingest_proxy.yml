@@ -1,0 +1,87 @@
+name: ingest-proxy
+# G3: DEF 14A governance sections, and the Management Risk metrics read from them.
+on:
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: "sections_dry | sections | metrics | register"
+        required: true
+        default: sections_dry
+        type: choice
+        options: [sections_dry, sections, metrics, register]
+      years:
+        description: "filing years, e.g. 2019-2026"
+        required: true
+        default: "2019-2026"
+        type: string
+      with_financials:
+        description: "only filers that have ratios (the scorecard's universe)"
+        required: false
+        default: false
+        type: boolean
+
+# SEC's fair-access limit is ten requests a second for the whole requester, not per job.
+# Sharing the group with ingest-narrative is deliberate: two fetching runs at once would
+# breach the limit however carefully each paces itself.
+concurrency:
+  group: sec-edgar-fetch
+  cancel-in-progress: false
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+  R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+
+jobs:
+  sections_dry:
+    # Validate the splitter on real proxies before committing hours of fetching.
+    if: inputs.parts == 'sections_dry'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: >
+          uv run python -m credit_workbench.ingest.proxy_sections
+          --years ${{ inputs.years }} --limit 60 --dry-run
+          ${{ inputs.with_financials && '--with-financials' || '' }}
+
+  sections:
+    if: inputs.parts == 'sections'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: >
+          uv run python -m credit_workbench.ingest.proxy_sections
+          --years ${{ inputs.years }}
+          ${{ inputs.with_financials && '--with-financials' || '' }}
+
+  # Reads the stored section text, so the extractor can be corrected and re-run without
+  # fetching tens of thousands of documents from SEC again.
+  metrics:
+    if: inputs.parts == 'metrics'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.governance
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_governance
+
+  register:
+    if: inputs.parts == 'register'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.ingest.proxy_register
