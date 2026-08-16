@@ -19,6 +19,11 @@ on:
         required: false
         default: false
         type: boolean
+      rebuild:
+        description: "metrics: rescore every filing, not just unscored ones"
+        required: false
+        default: false
+        type: boolean
 
 # SEC's fair-access limit is ten requests a second for the whole requester, not per job.
 # Sharing the group with ingest-narrative is deliberate: two fetching runs at once would
@@ -63,16 +68,22 @@ jobs:
           ${{ inputs.with_financials && '--with-financials' || '' }}
 
   # Reads the stored section text, so the extractor can be corrected and re-run without
-  # fetching tens of thousands of documents from SEC again.
+  # fetching tens of thousands of documents from SEC again. Scoring costs roughly 0.4
+  # seconds a filing, so eight years is a multi-hour job: it scores only filings not
+  # already in the mart and commits as it goes, which makes a timeout resumable rather
+  # than wasted. Pass rebuild when the extractor itself changed, since every existing
+  # row is then stale by definition.
   metrics:
     if: inputs.parts == 'metrics'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - run: uv run python -m credit_workbench.transform.governance
+      - run: >
+          uv run python -m credit_workbench.transform.governance
+          ${{ inputs.rebuild && '--rebuild' || '' }}
       - name: Verify
         run: uv run python -m credit_workbench.transform.verify_governance
 

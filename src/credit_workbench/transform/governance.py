@@ -38,6 +38,7 @@ scorecard; a fabricated ratio is not.
 """
 from __future__ import annotations
 
+import argparse
 import re
 
 import duckdb
@@ -108,13 +109,23 @@ def first_figure(cells: list[str]) -> float | None:
 
 
 def fee_blocks(text: str) -> list[dict]:
-    """Every contiguous run of fee-category rows, with its position and figures."""
+    """Every contiguous run of fee-category rows, with its position and figures.
+
+    The cheap substring test before `row_label` matters: this runs over every table row
+    of every section of every proxy, and cleaning a label costs two regex substitutions
+    before five more decide it was never a fee row. Every pattern here needs "fee" or
+    "total" somewhere in the first cell, so testing for those first is a strict superset
+    of what can match and skips almost every row for a fraction of the cost.
+    """
     lines = text.split("\n")
     marks: list[tuple[int, str, float | None]] = []
     for i, line in enumerate(lines):
         if "|" not in line:
             continue
         cells = [c.strip() for c in line.split("|")]
+        head = cells[0].lower()
+        if "fee" not in head and "total" not in head:
+            continue
         lab = row_label(cells[0])
         for name, pat in FEE_ROW.items():
             if re.match(pat, lab):
@@ -276,6 +287,11 @@ def director_table(text: str) -> dict:
         if "|" not in line:
             continue
         low = line.lower()
+        # Substring test before the word-boundary regex, for the same reason as in
+        # fee_blocks: a superset of what can match, at a fraction of the cost, over
+        # every table row of every section.
+        if ("name" not in low and "director" not in low and "nominee" not in low):
+            continue
         if not re.search(r"\bname\b|\bdirector\b|\bnominee\b", low):
             continue
         if sum(1 for k in DIR_HEADER_KEYS if re.search(k, low)) < 2:
@@ -404,7 +420,7 @@ def metrics_for_filing(sections: dict[str, str], meta: dict) -> dict:
 COLUMNS = TEXT + NUMERIC + INTEGER + BOOLEAN
 
 
-def build(con) -> int:
+def build(con, rebuild: bool = False) -> int:
     """Read the section view once, streaming, and write one row per proxy filing.
 
     Read one filing at a time this issued a query each: 4,859 round trips to MotherDuck
@@ -417,6 +433,27 @@ def build(con) -> int:
     last section arrives. One scan, and only one filing's text in memory at a time.
     Ordering is what makes that safe: sections of the same filing arrive together.
     """
+    con.execute("CREATE SCHEMA IF NOT EXISTS marts")
+    cols = ", ".join(
+        f"{c} " + ("VARCHAR" if c in TEXT else "BOOLEAN" if c in BOOLEAN
+                   else "BIGINT" if c in INTEGER else "DOUBLE")
+        for c in COLUMNS)
+    if rebuild:
+        con.execute("DROP TABLE IF EXISTS marts.governance_metrics")
+    con.execute(f"CREATE TABLE IF NOT EXISTS marts.governance_metrics ({cols})")
+
+    # Score only what is not scored yet. At roughly 0.4 seconds a filing this is a
+    # four-hour job over eight years, so a run that is interrupted has to be resumable
+    # rather than start again - the same reason the fetch skips filings already in the
+    # lake. Use --rebuild when the extractor itself changes, since then every existing
+    # row is stale by definition.
+    # Keyed on (cik, adsh), not adsh alone: co-registrants share an accession number, so
+    # skipping by accession would drop a parent because its subsidiary was scored.
+    done = {(str(a), str(b)) for a, b in con.execute(
+        "SELECT DISTINCT cik, adsh FROM marts.governance_metrics").fetchall()}
+    if done:
+        print(f"{len(done):,} filings already scored, skipping them")
+
     reader = con.execute("""
         SELECT cik, adsh, any_value(form) AS form,
                any_value(filing_date) AS filing_date,
@@ -426,16 +463,32 @@ def build(con) -> int:
         GROUP BY cik, adsh, section
         ORDER BY adsh, cik""").fetch_record_batch(10_000)
 
-    rows: list[dict] = []
+    insert = (f"INSERT INTO marts.governance_metrics "
+              f"VALUES ({', '.join(['?'] * len(COLUMNS))})")
+    buf: list[dict] = []
+    scored = skipped = 0
     cur_key: tuple[str, str] | None = None
     cur_meta: dict = {}
     cur_secs: dict[str, str] = {}
 
+    def commit() -> None:
+        """Write the buffer out, so an interrupted run keeps what it has done."""
+        if buf:
+            con.executemany(insert, [[r.get(c) for c in COLUMNS] for r in buf])
+            buf.clear()
+
     def flush() -> None:
-        if cur_key is not None:
-            rows.append(metrics_for_filing(cur_secs, cur_meta))
-            if len(rows) % 2000 == 0:
-                print(f"  scored {len(rows):,}")
+        nonlocal scored, skipped
+        if cur_key is None:
+            return
+        if cur_key in done:
+            skipped += 1
+            return
+        buf.append(metrics_for_filing(cur_secs, cur_meta))
+        scored += 1
+        if len(buf) >= 2000:
+            commit()
+            print(f"  scored {scored:,}")
 
     for batch in reader:
         d = batch.to_pydict()
@@ -447,28 +500,24 @@ def build(con) -> int:
                 cur_meta = {"cik": key[0], "adsh": key[1], "form": d["form"][i],
                             "filing_date": str(d["filing_date"][i]),
                             "period_of_report": str(d["period_of_report"][i])}
-            cur_secs[d["section"][i]] = d["text"][i]
+            if key not in done:          # no point holding text we will not score
+                cur_secs[d["section"][i]] = d["text"][i]
     flush()
-    print(f"{len(rows):,} proxy filings scored")
+    commit()
 
-    con.execute("CREATE SCHEMA IF NOT EXISTS marts")
-    con.execute("DROP TABLE IF EXISTS marts.governance_metrics")
-    cols = ", ".join(
-        f"{c} " + ("VARCHAR" if c in TEXT else "BOOLEAN" if c in BOOLEAN
-                   else "BIGINT" if c in INTEGER else "DOUBLE")
-        for c in COLUMNS)
-    con.execute(f"CREATE TABLE marts.governance_metrics ({cols})")
-    con.executemany(
-        f"INSERT INTO marts.governance_metrics VALUES ({', '.join(['?'] * len(COLUMNS))})",
-        [[r.get(c) for c in COLUMNS] for r in rows])
     n = con.execute("SELECT count(*) FROM marts.governance_metrics").fetchone()[0]
+    print(f"{scored:,} filings scored this run, {skipped:,} already present")
     print(f"table marts.governance_metrics  {n:,} rows")
     return n
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--rebuild", action="store_true",
+                    help="drop and rescore everything — use when the extractor changed")
+    args = ap.parse_args()
     con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
-    build(con)
+    build(con, rebuild=args.rebuild)
 
 
 if __name__ == "__main__":
