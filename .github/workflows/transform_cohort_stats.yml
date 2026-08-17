@@ -1,0 +1,19 @@
+name: transform-cohort-stats
+# G-02 and G-03: per-cohort ratio coverage with distributions, and outcome counts.
+on:
+  workflow_dispatch:
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.cohort_stats
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_cohort_stats
