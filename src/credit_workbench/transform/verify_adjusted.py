@@ -68,16 +68,30 @@ CHECKS: list[tuple[str, str, str]] = [
           AND a.lease_source = 'asc840_rent_capitalised'""",
      "compared > 100 and eight_exceeds_six == differ_at_all and differ_at_all > 0"),
 
-    ("capitalising leases raises leverage rather than lowering it",
+    # Capitalising at a multiple of rent raises leverage only below a crossover, and the
+    # crossover is the multiple itself. With leases at 8x rent, adjusted leverage exceeds
+    # reported leverage exactly when reported leverage is under 8x: comparing
+    # (debt + 8r)/(ebitda + r) against debt/ebitda reduces to 8·ebitda against debt. Above
+    # 8x the adjustment *lowers* leverage, which is arithmetic rather than a defect.
+    #
+    # The first version of this check asserted it rose unconditionally and failed on two
+    # rows. Two looked like noise worth waving through; it was the check being wrong about
+    # the mathematics, and the honest fix is to encode the crossover.
+    ("capitalising leases raises leverage below the multiple and lowers it above",
      """SELECT count(*) AS compared,
-               count(*) FILTER (WHERE a.adjusted_leverage < b.adjusted_leverage - 0.001)
-                   AS went_down
+               count(*) FILTER (WHERE b.adjusted_leverage < 8
+                                  AND a.adjusted_leverage
+                                      < b.adjusted_leverage - 0.001) AS rose_when_it_should,
+               count(*) FILTER (WHERE b.adjusted_leverage > 8.5
+                                  AND a.adjusted_leverage
+                                      > b.adjusted_leverage + 0.001) AS fell_when_it_should
         FROM marts.adjusted_metrics a
         JOIN marts.adjusted_metrics b
           ON b.cik = a.cik AND b.fy = a.fy AND b.basis = a.basis
         WHERE a.policy = 'lease_8x' AND b.policy = 'reported'
+          AND a.lease_source = 'asc840_rent_capitalised'
           AND a.adjusted_leverage IS NOT NULL AND b.adjusted_leverage IS NOT NULL""",
-     "compared > 10000 and went_down == 0"),
+     "compared > 1000 and rose_when_it_should == 0 and fell_when_it_should == 0"),
 
     # G-05. The splice must follow the stated rule, and the eras must land where the
     # accounting standard says: ASC 842 applies to fiscal years beginning after 15 Dec 2018.

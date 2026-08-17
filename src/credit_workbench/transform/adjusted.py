@@ -96,6 +96,15 @@ SELECT cik, fy, basis,
        -- Debt. long_term_debt_total already includes current maturities; where it is
        -- absent the non-current portion and the current portion are added instead. Short
        -- term borrowings are a separate facility, so they add in either case.
+       --
+       -- `has_any_debt_line` exists because coalescing an absent debt line to zero says
+       -- "this company has no debt" when the truth is "no debt line was reported". The
+       -- first version did that and produced a median adjusted leverage of 0.00 across
+       -- 41,336 company-years - a number that looked like a result. Debt is NULL unless
+       -- at least one line was actually present.
+       count(*) FILTER (WHERE line_code IN ('long_term_debt_total', 'long_term_debt',
+                                            'current_portion_ltd', 'short_term_debt')
+                          AND value IS NOT NULL) > 0 AS has_any_debt_line,
        coalesce(max(value) FILTER (WHERE line_code = 'long_term_debt_total'),
                 coalesce(max(value) FILTER (WHERE line_code = 'long_term_debt'), 0)
                 + coalesce(max(value) FILTER (WHERE line_code = 'current_portion_ltd'), 0))
@@ -130,10 +139,12 @@ WHERE fy IS NOT NULL
 GROUP BY cik, fy, basis
 """
 
-# G-05, as a published view: one splice, stated, with the source recorded per row so a
-# consumer can see which era each figure came from rather than having to infer it.
+# G-05, published as a table rather than a view. It reads `base` and `inputs`, which are
+# temp tables, and a view over a temp table resolves at query time - so the first version
+# was permanently broken the moment the build session ended, which the invariant suite
+# caught by asking the view a question after the build had finished.
 LEASE_VIEW = """
-CREATE OR REPLACE VIEW marts.lease_adjustment AS
+CREATE OR REPLACE TABLE marts.lease_adjustment AS
 SELECT b.cik, b.fy, b.basis,
        coalesce(i.op_lease_liability, b.op_lease_liability_bs) AS reported_lease_liability,
        i.rent_840,
@@ -156,9 +167,15 @@ WITH j AS (
     SELECT b.*, i.op_lease_liability, i.rent_840, i.op_lease_840_ladder,
            i.discount_rate, i.pension_obligation, i.pension_plan_assets,
            i.pension_funded_status,
-           coalesce(i.op_lease_liability, b.op_lease_liability_bs)
+           -- A lease liability and a rent expense are both non-negative by definition.
+           -- Where a filer or a tag mapping produces a negative one it is a data error,
+           -- and letting it through made adjusted debt fall below reported debt on 21
+           -- rows and EBITDAR fall below EBITDA on 35 - both impossible, and both then
+           -- inverted the lease multiple so that 8x capitalised less than 6x.
+           nullif(greatest(coalesce(i.op_lease_liability, b.op_lease_liability_bs), 0), 0)
                AS reported_lease_liability,
-           coalesce(b.op_lease_cost, i.rent_840) AS rent_or_lease_cost
+           nullif(greatest(coalesce(b.op_lease_cost, i.rent_840), 0), 0)
+               AS rent_or_lease_cost
     FROM base b LEFT JOIN inputs i
       ON i.cik = b.cik AND i.fy = b.fy AND i.basis = b.basis
 ),
@@ -189,29 +206,46 @@ SELECT cik, fy, basis, policy,
        ebit, dep_amort, revenue, interest_expense, cfo, total_assets,
        ebit + coalesce(dep_amort, 0) AS ebitda,
        rent_or_lease_cost AS rent,
-       -- EBITDAR adds the rent or lease cost back, which is the point of it.
-       ebit + coalesce(dep_amort, 0) + coalesce(rent_or_lease_cost, 0) AS ebitdar,
-       long_term_debt + short_term_debt AS reported_debt,
+       -- The rent add-back is part of the same adjustment as capitalising the lease: if
+       -- the lease is put into debt then its rent belongs back in earnings, and if it is
+       -- not then neither does the rent. Adding it under every policy meant the
+       -- `reported` baseline adjusted its own denominator while leaving the numerator
+       -- alone, which is what let leverage *fall* when leases were capitalised.
+       ebit + coalesce(dep_amort, 0)
+           + CASE WHEN capitalise_op_leases THEN coalesce(rent_or_lease_cost, 0) ELSE 0 END
+           AS ebitdar,
+       CASE WHEN has_any_debt_line THEN long_term_debt + short_term_debt END
+           AS reported_debt,
        finance_lease_debt,
        capitalised_leases,
        pension_deficit,
-       long_term_debt + short_term_debt + finance_lease_debt
-           + capitalised_leases + pension_deficit AS adjusted_debt,
+       CASE WHEN has_any_debt_line
+            THEN long_term_debt + short_term_debt + finance_lease_debt
+                 + capitalised_leases + pension_deficit END AS adjusted_debt,
        -- Labelled approx deliberately: EBITDA less cash interest and cash tax is a
        -- standard shape, not any agency's exact FFO.
        nullif(ebit + coalesce(dep_amort, 0)
               - coalesce(interest_paid, interest_expense, 0)
               - coalesce(taxes_paid, 0), 0) AS ffo_approx,
-       CASE WHEN (ebit + coalesce(dep_amort, 0) + coalesce(rent_or_lease_cost, 0)) > 0
+       CASE WHEN has_any_debt_line
+             AND (ebit + coalesce(dep_amort, 0)
+                  + CASE WHEN capitalise_op_leases THEN coalesce(rent_or_lease_cost, 0)
+                         ELSE 0 END) > 0
             THEN (long_term_debt + short_term_debt + finance_lease_debt
                   + capitalised_leases + pension_deficit)
-                 / (ebit + coalesce(dep_amort, 0) + coalesce(rent_or_lease_cost, 0))
+                 / (ebit + coalesce(dep_amort, 0)
+                    + CASE WHEN capitalise_op_leases
+                           THEN coalesce(rent_or_lease_cost, 0) ELSE 0 END)
        END AS adjusted_leverage,
+       -- Fixed-charge cover always carries the rent in both halves: it is a measure of
+       -- whether earnings service the fixed charges, and rent is one whether or not the
+       -- lease has been capitalised into debt.
        CASE WHEN (coalesce(interest_expense, 0) + coalesce(rent_or_lease_cost, 0)) > 0
             THEN (ebit + coalesce(dep_amort, 0) + coalesce(rent_or_lease_cost, 0))
                  / (coalesce(interest_expense, 0) + coalesce(rent_or_lease_cost, 0))
        END AS fixed_charge_cover,
-       CASE WHEN (long_term_debt + short_term_debt + finance_lease_debt
+       CASE WHEN has_any_debt_line
+             AND (long_term_debt + short_term_debt + finance_lease_debt
                   + capitalised_leases + pension_deficit) > 0
             THEN (ebit + coalesce(dep_amort, 0)
                   - coalesce(interest_paid, interest_expense, 0)
