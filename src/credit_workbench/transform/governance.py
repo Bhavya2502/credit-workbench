@@ -398,8 +398,13 @@ NUMERIC = ["audit_fees", "audit_related_fees", "tax_fees", "other_fees",
 INTEGER = ["directors_listed", "directors_marked_independent", "sections_found",
            "related_party_chars"]
 BOOLEAN = [*FLAG_SECTIONS, "fee_units_overridden"]
-TEXT = ["cik", "adsh", "form", "filing_date", "period_of_report", "fee_units",
+TEXT = ["adsh", "form", "filing_date", "period_of_report", "fee_units",
         "fee_source_section", "independence_statement"]
+# G-21: `cik` is BIGINT in 44 tables of this warehouse and VARCHAR in 19, and this mart was
+# one of the 19 - my own doing. Joining across the split needs
+# `lpad(CAST(... AS VARCHAR), 10, '0')` on both sides, which is a whole class of silent
+# error waiting to happen. Aligning with the majority costs nothing and removes one case.
+CIK = ["cik"]
 
 
 def metrics_for_filing(sections: dict[str, str], meta: dict) -> dict:
@@ -444,7 +449,7 @@ def metrics_for_filing(sections: dict[str, str], meta: dict) -> dict:
     return row
 
 
-COLUMNS = TEXT + NUMERIC + INTEGER + BOOLEAN
+COLUMNS = CIK + TEXT + NUMERIC + INTEGER + BOOLEAN
 
 
 def build(con, rebuild: bool = False) -> int:
@@ -468,7 +473,8 @@ def build(con, rebuild: bool = False) -> int:
     """
     con.execute("CREATE SCHEMA IF NOT EXISTS marts")
     cols = ", ".join(
-        f"{c} " + ("VARCHAR" if c in TEXT else "BOOLEAN" if c in BOOLEAN
+        f"{c} " + ("BIGINT" if c in CIK else "VARCHAR" if c in TEXT
+                   else "BOOLEAN" if c in BOOLEAN
                    else "BIGINT" if c in INTEGER else "DOUBLE")
         for c in COLUMNS)
     if rebuild:
@@ -530,7 +536,8 @@ def build(con, rebuild: bool = False) -> int:
                     continue
                 if key not in meta_by_filing:
                     meta_by_filing[key] = {
-                        "cik": key[0], "adsh": key[1], "form": d["form"][i],
+                        "cik": int(key[0]), "adsh": key[1],
+                        "form": d["form"][i],
                         "filing_date": str(d["filing_date"][i]),
                         "period_of_report": str(d["period_of_report"][i])}
                 secs_by_filing.setdefault(key, {})[d["section"][i]] = d["text"][i]

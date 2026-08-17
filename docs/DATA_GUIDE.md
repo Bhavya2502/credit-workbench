@@ -123,6 +123,9 @@ WHERE dimension_count = 1   -- this axis is the only one on the fact
 | **Adjusted debt / EBITDAR / leverage / FFO** | `marts.adjusted_metrics` | pick a `policy` |
 | **What each adjustment policy assumes** | `ref.adjustment_policy` | — |
 | **The ASC 840 → 842 lease splice on its own** | `marts.lease_adjustment` | `lease_source` |
+| **Every name a company has filed under** | `ref.company_names` | check `is_ambiguous` |
+| **Names one company left and another now uses** | `ref.name_collisions` | — |
+| **First and last filing date per company** | `ref.company_filing_span` | — |
 
 ---
 
@@ -318,7 +321,17 @@ ON lpad(CAST(a.cik AS VARCHAR), 10, '0') = lpad(CAST(b.cik AS VARCHAR), 10, '0')
 ## 7. Caveats that will bite
 
 - **`material_weakness` in `quali.note_signals` discriminates inversely** — companies
-  flagged default *less*. Do not put it in a model. Documented, not removed.
+  flagged default *less*. Do not put it in a model. Documented, not removed. The likely
+  cause is now understood: it matches the phrase, and Item 9A carries the *definition* of a
+  material weakness as boilerplate. Polarity of the ICFR conclusion sentence discriminates
+  the right way instead (2.3× distress lift) — see `warehouse/diag_icfr.py`.
+- **`cik` is BIGINT in most tables and VARCHAR in some.** Cast both sides when joining
+  across the split: `lpad(CAST(x AS VARCHAR), 10, '0')`. `marts.governance_metrics` was
+  VARCHAR and is now BIGINT, which removes one case but not the class.
+- **`marts.ratios`, `marts.spreads_a` and `marts.spreads_q` are superseded** and still
+  present. Use `marts.ratio_values` (6.7m) and `marts.spread_lines` (52.7m). They have not
+  been renamed because a second workstream shares this database and a rename would break it
+  silently.
 - **Superseded tables remain.** `marts.ratios` (254,380 rows) is *not*
   `marts.ratio_values` (6,660,518). `marts.spreads_a`/`spreads_q` are *not*
   `marts.spread_lines` (52,658,794). The current ones are listed in this guide.
@@ -510,6 +523,32 @@ FY2025. Only 1,203 of 452,942 rows carry both.
 `lease_source` records which era each row came from (`asc842_reported_liability`,
 `rent_capitalised`, `asc840_ladder_only`, `none`). The raw columns are untouched, so your own
 splice remains possible — this one is a *named* option to cite, not a default forced on you.
+
+### Resolving a company name without picking up a survivor
+
+**Do not join a cohort on company name without checking `ref.company_names.is_ambiguous`.**
+
+`ref.company_names` — `cik, name, name_key, name_role, valid_from, valid_to,
+ciks_with_this_name, is_ambiguous`. 1,052,192 names over 979,598 companies; 20,860 are
+ambiguous. `name_role` is `current` or `former`; `name_key` is the normalised match key and
+`name` is the name exactly as filed, so any match is auditable.
+
+`ref.name_collisions` — 2,219 rows over 1,988 distinct names that **one company has moved on
+from and another company now files under**. This is not hypothetical: Bonanza Creek Energy
+went through Chapter 11 in 2017 and the name now belongs to a different CIK; NovaStar
+Financial and SG Blocks are the same shape. **40 of the 780 companies with a bankruptcy
+outcome sit in a collision**, so this bites hardest exactly where it matters — scoring a
+survivor's financials against a predecessor's default.
+
+Survivorship itself is fine: all 780 bankrupt CIKs are retained in `ref.dim_company` and all
+780 are reachable through the name index.
+
+**There is no `status` or `is_active` field, deliberately.** `ref.company_filing_span` gives
+`first_filing, last_filing, last_filing_year, filings` and nothing more. Last-filing-date is
+a weaker proxy for failure than it looks: 63.7% of companies with a bankruptcy outcome
+stopped filing before 2024, but so did **43.6%** of those without one — acquisitions, going
+private and deregistration are indistinguishable from here. Derive your own flag if you must,
+knowing that.
 
 ---
 
