@@ -288,6 +288,11 @@ def main() -> None:
         raise SystemExit(f"base is not one row per (cik, fy, basis): {rows:,} vs {keys:,}")
     print(f"guard base is one row per (cik, fy, basis)  {rows:,}")
 
+    # An earlier build published this as a view, and CREATE OR REPLACE TABLE will not
+    # replace an object of a different type. Dropping both forms keeps the switch from
+    # view to table re-runnable rather than needing a manual fix in the warehouse.
+    con.execute("DROP VIEW IF EXISTS marts.lease_adjustment")
+    con.execute("DROP TABLE IF EXISTS marts.lease_adjustment")
     con.execute(LEASE_VIEW)
     n = con.execute("SELECT count(*) FROM marts.lease_adjustment").fetchone()[0]
     print(f"view  marts.lease_adjustment  {n:,} rows")
