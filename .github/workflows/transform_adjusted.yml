@@ -1,0 +1,19 @@
+name: transform-adjusted
+# G-04 and G-05: agency-style adjusted metrics under named policies, and the lease splice.
+on:
+  workflow_dispatch:
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.adjusted
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_adjusted
