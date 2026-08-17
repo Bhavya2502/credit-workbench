@@ -273,6 +273,26 @@ WHERE ebit IS NOT NULL OR cfo IS NOT NULL
 """
 
 
+def drop_object(con, schema: str, name: str) -> None:
+    """Drop whatever is there, whichever kind it is.
+
+    An earlier build published `lease_adjustment` as a view and this one publishes a table,
+    and `CREATE OR REPLACE TABLE` will not replace an object of a different type. Issuing
+    both `DROP VIEW IF EXISTS` and `DROP TABLE IF EXISTS` does not fix it either: `IF
+    EXISTS` suppresses the error for an object that is absent, not for one of the wrong
+    type, so the view drop raised on a table. Asking the catalogue first is the only
+    version that is genuinely re-runnable.
+    """
+    got = con.execute("""
+        SELECT table_type FROM information_schema.tables
+        WHERE table_schema = ? AND table_name = ?""", [schema, name]).fetchone()
+    if not got:
+        return
+    kind = "VIEW" if got[0] == "VIEW" else "TABLE"
+    con.execute(f"DROP {kind} {schema}.{name}")
+    print(f"drop  {schema}.{name} (was a {kind.lower()})")
+
+
 def main() -> None:
     con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
     con.execute("SET temp_directory = '/tmp/duckdb_spill'")
@@ -298,11 +318,7 @@ def main() -> None:
         raise SystemExit(f"base is not one row per (cik, fy, basis): {rows:,} vs {keys:,}")
     print(f"guard base is one row per (cik, fy, basis)  {rows:,}")
 
-    # An earlier build published this as a view, and CREATE OR REPLACE TABLE will not
-    # replace an object of a different type. Dropping both forms keeps the switch from
-    # view to table re-runnable rather than needing a manual fix in the warehouse.
-    con.execute("DROP VIEW IF EXISTS marts.lease_adjustment")
-    con.execute("DROP TABLE IF EXISTS marts.lease_adjustment")
+    drop_object(con, "marts", "lease_adjustment")
     con.execute(LEASE_VIEW)
     n = con.execute("SELECT count(*) FROM marts.lease_adjustment").fetchone()[0]
     print(f"view  marts.lease_adjustment  {n:,} rows")
