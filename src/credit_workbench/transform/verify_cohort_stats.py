@@ -35,12 +35,25 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.ratio_coverage""",
      "impossible == 0 and max_coverage_pct <= 100.0"),
 
-    ("percentiles are ordered",
+    # Tested with a tolerance, because exact float inequality is the wrong test after an
+    # interpolation. 408 of 1,614,345 cells failed the strict version; measured, the worst
+    # violation was 1.14e-13 absolute and 1.99e-16 relative - one unit in the last place of
+    # a double - and none exceeded 1e-9. All of them were cohorts of two to five companies
+    # where p10 and p25 land on the same value and differ only in the final bit.
+    #
+    # Two other explanations were checked and eliminated first, because either would have
+    # been serious: magnitude overflow (no infinities, no NaN, largest ratio 2.46e10) and
+    # mislabelled list indices, which would have made every percentile column wrong while
+    # each value still looked plausible. The list form returns identical results to five
+    # separate quantile_cont calls on the same cohort.
+    ("percentiles are ordered, to within float tolerance",
      """SELECT count(*) AS rows,
-               count(*) FILTER (WHERE p10 > p25 OR p25 > p50
-                                   OR p50 > p75 OR p75 > p90) AS out_of_order,
-               count(*) FILTER (WHERE p50 < min_value OR p50 > max_value)
-                   AS median_outside_range
+               count(*) FILTER (WHERE greatest(p10 - p25, p25 - p50,
+                                              p50 - p75, p75 - p90) > 1e-9)
+                   AS out_of_order,
+               max(greatest(p10 - p25, p25 - p50, p50 - p75, p75 - p90)) AS worst_gap,
+               count(*) FILTER (WHERE p50 < min_value - 1e-9
+                                   OR p50 > max_value + 1e-9) AS median_outside_range
         FROM marts.ratio_coverage""",
      "out_of_order == 0 and median_outside_range == 0"),
 
