@@ -75,26 +75,32 @@ CHECKS: list[tuple[str, str, str]] = [
      "compared > 100 and eight_exceeds_six == differ_at_all and differ_at_all > 0"),
 
     # Capitalising at a multiple of rent raises leverage only below a crossover, and the
-    # crossover is the multiple itself. With leases at 8x rent, adjusted leverage exceeds
-    # reported leverage exactly when reported leverage is under 8x: comparing
-    # (debt + 8r)/(ebitda + r) against debt/ebitda reduces to 8·ebitda against debt. Above
-    # 8x the adjustment *lowers* leverage, which is arithmetic rather than a defect.
+    # crossover is the multiple itself — but only when the lease is the *sole* difference
+    # between the two policies being compared.
     #
-    # The first version of this check asserted it rose unconditionally and failed on two
-    # rows. Two looked like noise worth waving through; it was the check being wrong about
-    # the mathematics, and the honest fix is to encode the crossover.
+    # This check has been wrong twice, both times because the algebra was incomplete.
+    # First it asserted leverage always rises, which is false: comparing
+    # (debt + 8r)/(ebitda + r) against debt/ebitda reduces to 8·ebitda against debt, so
+    # above 8x the adjustment lowers leverage. Then it compared lease_8x against `reported`,
+    # which also differs by the pension deficit P, giving 8·E + P·E/r against debt - a
+    # crossover that moves with P and is not 8 at all. That left 18 rows failing.
+    #
+    # `pension_only` is the correct baseline: it carries the same pension deficit and the
+    # same finance leases, so the operating lease is the only difference and the crossover
+    # is exactly the multiple. Rows within a whisker of 8x are skipped, since either
+    # direction is correct there.
     ("capitalising leases raises leverage below the multiple and lowers it above",
      """SELECT count(*) AS compared,
-               count(*) FILTER (WHERE b.adjusted_leverage < 8
+               count(*) FILTER (WHERE b.adjusted_leverage < 7.9
                                   AND a.adjusted_leverage
                                       < b.adjusted_leverage - 0.001) AS rose_when_it_should,
-               count(*) FILTER (WHERE b.adjusted_leverage > 8.5
+               count(*) FILTER (WHERE b.adjusted_leverage > 8.1
                                   AND a.adjusted_leverage
                                       > b.adjusted_leverage + 0.001) AS fell_when_it_should
         FROM marts.adjusted_metrics a
         JOIN marts.adjusted_metrics b
           ON b.cik = a.cik AND b.fy = a.fy AND b.basis = a.basis
-        WHERE a.policy = 'lease_8x' AND b.policy = 'reported'
+        WHERE a.policy = 'lease_8x' AND b.policy = 'pension_only'
           AND a.lease_source = 'rent_capitalised'
           AND a.adjusted_leverage IS NOT NULL AND b.adjusted_leverage IS NOT NULL""",
      "compared > 1000 and rose_when_it_should == 0 and fell_when_it_should == 0"),
