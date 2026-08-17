@@ -70,10 +70,15 @@ CREATE OR REPLACE TABLE ref.adjustment_policy (
 # every total. One period_end per (cik, fy, basis) is chosen, the latest.
 BASE = """
 CREATE OR REPLACE TEMP TABLE base AS
+-- qtrs = 0 is an instant and qtrs = 4 is an annual flow. Both are needed: every debt,
+-- lease and asset line is a balance-sheet instant, so filtering to qtrs = 4 kept the
+-- income statement and cash flow and silently discarded the entire balance sheet. The
+-- result was adjusted_leverage NULL on all 726,690 rows - and two invariants that
+-- "passed" only because a NULL comparison counts as neither true nor false.
 WITH picked AS (
     SELECT cik, fy, basis, max(period_end) AS period_end
     FROM marts.spread_lines
-    WHERE qtrs = 4 AND fy IS NOT NULL
+    WHERE qtrs IN (0, 4) AND fy IS NOT NULL
     GROUP BY cik, fy, basis
 ),
 lines AS (
@@ -81,7 +86,7 @@ lines AS (
     FROM marts.spread_lines l
     JOIN picked p ON p.cik = l.cik AND p.fy = l.fy AND p.basis = l.basis
                  AND p.period_end = l.period_end
-    WHERE l.qtrs = 4
+    WHERE l.qtrs IN (0, 4)
 )
 SELECT cik, fy, basis,
        max(value) FILTER (WHERE line_code = 'operating_income') AS ebit,
@@ -145,14 +150,19 @@ GROUP BY cik, fy, basis
 # caught by asking the view a question after the build had finished.
 LEASE_VIEW = """
 CREATE OR REPLACE TABLE marts.lease_adjustment AS
+-- Clamped identically to the mart. Without that the two disagreed on 139 rows where a
+-- filer reported a negative lease liability: the view called it ASC 842 and the mart, which
+-- clamps, fell through to the 840 branch.
 SELECT b.cik, b.fy, b.basis,
-       coalesce(i.op_lease_liability, b.op_lease_liability_bs) AS reported_lease_liability,
+       nullif(greatest(coalesce(i.op_lease_liability, b.op_lease_liability_bs), 0), 0)
+           AS reported_lease_liability,
        i.rent_840,
        i.op_lease_840_ladder,
        i.discount_rate,
-       coalesce(b.op_lease_cost, i.rent_840) AS rent_or_lease_cost,
+       nullif(greatest(coalesce(b.op_lease_cost, i.rent_840), 0), 0) AS rent_or_lease_cost,
        CASE
-           WHEN coalesce(i.op_lease_liability, b.op_lease_liability_bs) IS NOT NULL
+           WHEN nullif(greatest(coalesce(i.op_lease_liability,
+                                         b.op_lease_liability_bs), 0), 0) IS NOT NULL
                THEN 'asc842_reported_liability'
            WHEN i.rent_840 IS NOT NULL THEN 'asc840_rent_capitalised'
            WHEN i.op_lease_840_ladder IS NOT NULL THEN 'asc840_ladder_only'

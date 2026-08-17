@@ -30,23 +30,29 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.adjusted_metrics""",
      "rows == distinct_keys"),
 
-    # The baseline must be exactly unadjusted, or every comparison against it is wrong.
+    # `with_debt` is counted, not just the violations. Both of the next two checks passed a
+    # build in which adjusted_debt was NULL on every one of 726,690 rows, because a NULL
+    # comparison is neither true nor false and so counts as no violation. A check that
+    # cannot distinguish "nothing is wrong" from "there is nothing here" is not a check, so
+    # each now asserts that it had something to look at.
     ("the reported policy adds nothing",
      """SELECT count(*) AS rows,
+               count(adjusted_debt) AS with_debt,
                count(*) FILTER (WHERE capitalised_leases <> 0) AS leases_added,
                count(*) FILTER (WHERE pension_deficit <> 0) AS pension_added,
                count(*) FILTER (WHERE abs(adjusted_debt - reported_debt
                                           - finance_lease_debt) > 1) AS debt_differs
         FROM marts.adjusted_metrics WHERE policy = 'reported'""",
-     "leases_added == 0 and pension_added == 0 and debt_differs == 0"),
+     "with_debt > 50000 and leases_added == 0 and pension_added == 0 "
+     "and debt_differs == 0"),
 
     ("adjusted debt is never below reported debt",
-     """SELECT count(*) AS rows,
+     """SELECT count(*) AS rows, count(adjusted_debt) AS with_debt,
                count(*) FILTER (WHERE adjusted_debt < reported_debt - 1) AS impossible,
                count(*) FILTER (WHERE capitalised_leases < 0
                                    OR pension_deficit < 0) AS negative_adjustment
         FROM marts.adjusted_metrics""",
-     "impossible == 0 and negative_adjustment == 0"),
+     "with_debt > 250000 and impossible == 0 and negative_adjustment == 0"),
 
     ("EBITDAR is never below EBITDA",
      """SELECT count(*) AS rows,
