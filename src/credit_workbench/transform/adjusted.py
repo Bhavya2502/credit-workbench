@@ -117,11 +117,16 @@ SELECT cik, fy, basis,
        count(*) FILTER (WHERE line_code IN ('long_term_debt_total', 'long_term_debt',
                                             'current_portion_ltd', 'short_term_debt')
                           AND value IS NOT NULL) > 0 AS has_any_debt_line,
-       coalesce(max(value) FILTER (WHERE line_code = 'long_term_debt_total'),
+       -- Clamped like the leases were, and for the same reason: borrowings cannot be
+       -- negative, and an unclamped one produced 11 negative adjusted leverage figures.
+       -- The earlier clamps covered operating and finance leases but not the debt lines
+       -- themselves, which is the same oversight three times over.
+       greatest(coalesce(max(value) FILTER (WHERE line_code = 'long_term_debt_total'),
                 coalesce(max(value) FILTER (WHERE line_code = 'long_term_debt'), 0)
-                + coalesce(max(value) FILTER (WHERE line_code = 'current_portion_ltd'), 0))
+                + coalesce(max(value) FILTER (
+                      WHERE line_code = 'current_portion_ltd'), 0)), 0)
            AS long_term_debt,
-       coalesce(max(value) FILTER (WHERE line_code = 'short_term_debt'), 0)
+       greatest(coalesce(max(value) FILTER (WHERE line_code = 'short_term_debt'), 0), 0)
            AS short_term_debt,
        -- Clamped for the same reason as the operating lease: a lease liability cannot be
        -- negative, and an unclamped one put adjusted debt below reported debt on 57 rows,
@@ -179,7 +184,8 @@ SELECT b.cik, b.fy, b.basis,
            WHEN nullif(greatest(coalesce(i.op_lease_liability,
                                          b.op_lease_liability_bs), 0), 0) IS NOT NULL
                THEN 'asc842_reported_liability'
-           WHEN i.rent_840 IS NOT NULL THEN 'asc840_rent_capitalised'
+           WHEN nullif(greatest(coalesce(b.op_lease_cost, i.rent_840), 0), 0) IS NOT NULL
+               THEN 'rent_capitalised'
            WHEN i.op_lease_840_ladder IS NOT NULL THEN 'asc840_ladder_only'
            ELSE 'none'
        END AS lease_source
@@ -209,12 +215,19 @@ priced AS (
            p.prefer_reported_liability, p.include_pension_deficit,
            -- The splice. Reported liability first where the policy prefers it, then the
            -- old rent disclosure at the policy's multiple.
+           -- The rent capitalised must be the same rent added back to earnings, or the
+           -- two halves of one adjustment disagree. It was reading rent_840 while the
+           -- add-back used coalesce(op_lease_cost, rent_840), and where a filer disclosed
+           -- a lease cost but no liability the two differed - which broke the arithmetic
+           -- crossover on 19 rows, since (debt + 8r)/(ebitda + r') has no clean
+           -- relationship to debt/ebitda when r' is not r.
            CASE
                WHEN NOT p.capitalise_op_leases THEN 0.0
                WHEN p.prefer_reported_liability
                     AND j.reported_lease_liability IS NOT NULL
                    THEN j.reported_lease_liability
-               WHEN j.rent_840 IS NOT NULL THEN j.rent_840 * p.lease_multiple
+               WHEN j.rent_or_lease_cost IS NOT NULL
+                   THEN j.rent_or_lease_cost * p.lease_multiple
                ELSE 0.0
            END AS capitalised_leases,
            CASE
@@ -280,7 +293,7 @@ SELECT cik, fy, basis, policy,
        END AS ffo_to_adjusted_debt,
        CASE
            WHEN reported_lease_liability IS NOT NULL THEN 'asc842_reported_liability'
-           WHEN rent_840 IS NOT NULL THEN 'asc840_rent_capitalised'
+           WHEN rent_or_lease_cost IS NOT NULL THEN 'rent_capitalised'
            ELSE 'none'
        END AS lease_source
 FROM priced

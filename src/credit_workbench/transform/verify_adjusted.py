@@ -71,7 +71,7 @@ CHECKS: list[tuple[str, str, str]] = [
         JOIN marts.adjusted_metrics b
           ON b.cik = a.cik AND b.fy = a.fy AND b.basis = a.basis
         WHERE a.policy = 'lease_8x' AND b.policy = 'lease_6x'
-          AND a.lease_source = 'asc840_rent_capitalised'""",
+          AND a.lease_source = 'rent_capitalised'""",
      "compared > 100 and eight_exceeds_six == differ_at_all and differ_at_all > 0"),
 
     # Capitalising at a multiple of rent raises leverage only below a crossover, and the
@@ -95,7 +95,7 @@ CHECKS: list[tuple[str, str, str]] = [
         JOIN marts.adjusted_metrics b
           ON b.cik = a.cik AND b.fy = a.fy AND b.basis = a.basis
         WHERE a.policy = 'lease_8x' AND b.policy = 'reported'
-          AND a.lease_source = 'asc840_rent_capitalised'
+          AND a.lease_source = 'rent_capitalised'
           AND a.adjusted_leverage IS NOT NULL AND b.adjusted_leverage IS NOT NULL""",
      "compared > 1000 and rose_when_it_should == 0 and fell_when_it_should == 0"),
 
@@ -109,7 +109,7 @@ CHECKS: list[tuple[str, str, str]] = [
                                   AND lease_source = 'asc842_reported_liability')
                    AS asc842_before_2018,
                count(*) FILTER (WHERE fy <= 2017
-                                  AND lease_source = 'asc840_rent_capitalised')
+                                  AND lease_source = 'rent_capitalised')
                    AS asc840_before_2018
         FROM marts.adjusted_metrics WHERE policy = 'lease_8x' AND basis = 'first_reported'""",
      "asc842_after_2020 > 5000 and asc840_before_2018 > 1000 "
