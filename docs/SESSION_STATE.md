@@ -84,7 +84,7 @@ The fee reader was wrong on 16 of 40 filings before it was region-scoped — rep
 total of 11 against a table stating 2,017, and once lifting 4,011,243 from the Rule 0-11
 cover-page filing fee. Requiring two of the four Item 9(e) categories inside one
 contiguous block fixed it: 96% of filings with a stated total now tie to it. See
-`docs/DATA_GUIDE.md` §10 for the full coverage table — **read it before scoring.**
+`docs/DATA_GUIDE.md` §11 for the full coverage table — **read it before scoring.**
 
 **Segments and concentration gained vintage flags.** They were the only fact marts
 without `is_latest`, so a naive sum counted every restatement — Intel's FY2024 Client

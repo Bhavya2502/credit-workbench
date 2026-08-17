@@ -62,13 +62,13 @@ WHERE TRY_CAST(cik AS BIGINT) = 50863 AND fy = 2024
   AND is_latest;
 ```
 
-An eleven-fold overstatement that looks like a plausible number. `marts.concentration`
-still lacks these flags — dedupe it yourself on `filed` until it is rebuilt:
+An eleven-fold overstatement that looks like a plausible number.
 
-```sql
-QUALIFY row_number() OVER (
-    PARTITION BY cik, period_end, qtrs, tag, counterparty ORDER BY filed DESC) = 1
-```
+`marts.concentration` **now carries the flags too** — 1,157,593 rows, 701,161 latest
+(60.6%) — so filter it the same way as the others. An earlier version of this guide told
+you to dedupe it by hand on `filed`; that instruction was stale from 15 August and is
+withdrawn. `marts.segments_all_vintages` and `marts.concentration_all_vintages` remain for
+anyone who wants every vintage deliberately.
 
 ### Rule 2 — `marts.facts_by_note` is many-to-many
 
@@ -116,6 +116,10 @@ WHERE dimension_count = 1   -- this axis is the only one on the fact
 | Everything in one note | `marts.facts_by_note` | `note_type` + `note_category` |
 | What a tag means | `ref.tag_catalog` | — |
 | Company master | `ref.dim_company` | — |
+| **Peer groups above SIC2** | `ref.industry_group` | join `sic4` = your `sic` |
+| **SIC hierarchy (group/division)** | `ref.sic_hierarchy` | — |
+| **Which ratios compute for a cohort, and their distribution** | `marts.ratio_coverage` | `is_sufficient` |
+| **How many credit events a cohort holds** | `marts.outcome_counts` | `can_calibrate_*` |
 
 ---
 
@@ -390,7 +394,68 @@ UNION ALL SELECT 'risk factors', count(*) FROM quali.risk_factors WHERE cik='000
 
 ---
 
-## 10. Governance and the Management Risk scorecard (tracker G3)
+## 10. Cohorts, coverage and outcome counts
+
+Built for scorecard design: what computes for whom, how it is distributed, and whether
+there are enough events to calibrate against.
+
+### Peer groups above SIC2 — `ref.industry_group`
+
+`sic4, sic3, sic2, division_code, division_name, sic4_description, industry_level,
+industry_code, industry_label, peers, custom_industry`. **Join on `sic4`**, which matches
+the `sic` column carried by `marts.ratio_values` and `marts.credit_outcomes`.
+
+410 SIC codes map to **140 peer groups**. Each was rolled up only as far as needed to reach
+30 comparable companies — `industry_level` records how far that was, and `peers` how many it
+reached. Four-digit SIC is too thin (263 of 400 codes have fewer than ten companies, median
+six) and the 70 two-digit major groups are too blunt; 140 sits in the gap.
+
+`custom_industry` is deliberately `NULL` — it is reserved for a house scheme that is a
+business decision, not a data one. `ref.sic_hierarchy` carries the raw hierarchy beneath.
+
+### `marts.ratio_coverage` — which ratios are usable for a cohort
+
+Grain: `industry_scheme × industry_code × size_band × fy × basis × ratio`. Columns
+`companies_total, companies_with_value, coverage_pct, is_sufficient, p10, p25, p50, p75,
+p90, min_value, max_value`.
+
+**Read `industry_scheme` first.** Every cohort appears twice:
+
+| `industry_scheme` | What it is | Use when |
+|---|---|---|
+| `sic2` | the 73 two-digit major groups | you need SIC compatibility |
+| `peer_group` | the 140 groups above | you want a cohort big enough to draw a distribution from |
+
+This exists because at `ratio × sic2 × size_band`, FY2024 gives 12,127 cells of which only
+1,409 hold 30+ companies and 7,663 hold fewer than 10 — median 6. **A p10 and p90 over six
+companies are noise wearing a precise number.** `is_sufficient` (30+ companies with a
+value) is the flag to filter on; `size_band = 'ALL'` pools the sizes, which is often the
+only cut with enough companies.
+
+```sql
+-- thresholds for a factor, only where the cohort can support them
+SELECT industry_code, industry_label, size_band, p25, p50, p75, companies_with_value
+FROM marts.ratio_coverage
+WHERE ratio = 'debt_to_ebitda' AND fy = 2024 AND basis = 'first_reported'
+  AND industry_scheme = 'peer_group' AND is_sufficient
+ORDER BY p50 DESC;
+```
+
+### `marts.outcome_counts` — whether a scale can be calibrated
+
+Grain: `industry_scheme × industry_code × size_band × fy`, with `fy IS NULL` meaning the
+whole window pooled. Counts for `distress_12m/24m`, `default_12m/24m`, `bankruptcy_24m`,
+`debt_acceleration_24m`, `non_reliance_24m`, `adverse_delisting_24m`, plus
+`distress_24m_rate`, `default_24m_rate` and the flags `can_calibrate_default` /
+`can_calibrate_distress` (30+ events).
+
+The pooled `fy IS NULL` row is usually the only one with enough events for a cohort. Source
+totals across the whole warehouse: 127,190 company-years, 21,778 `distress_12m`, 29,709
+`distress_24m`, 7,458 `default_24m`, 2,823 `bankruptcy_24m`.
+
+---
+
+## 11. Governance and the Management Risk scorecard (tracker G3)
 
 `quali.proxy_sections` holds DEF 14A text split into named governance sections, and
 `marts.governance_metrics` holds one narrow row per proxy filing with the numbers read out
@@ -460,7 +525,7 @@ LIMIT 25;
 
 ---
 
-## 11. Regenerating this
+## 12. Regenerating this
 
 Row counts move as backfills land. These run against the warehouse without anything
 landing locally:

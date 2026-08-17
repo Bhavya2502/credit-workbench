@@ -75,16 +75,15 @@ SELECT industry_scheme, industry_code, fy, basis, 'ALL' AS size_band,
 FROM tagged GROUP BY 1, 2, 3, 4, 5
 """
 
+# All five percentiles come from one `quantile_cont` call taking a list, not five calls.
+# Five separate aggregates sort the same group five times; over 13.2m tagged rows that was
+# enough to spill to disk, and spilling is what broke the first run.
 NUMER = """
 CREATE OR REPLACE TEMP TABLE numer AS
 SELECT industry_scheme, industry_code, any_value(industry_label) AS industry_label,
        fy, basis, size_band, ratio,
        count(DISTINCT cik) AS companies_with_value,
-       quantile_cont(value, 0.10) AS p10,
-       quantile_cont(value, 0.25) AS p25,
-       quantile_cont(value, 0.50) AS p50,
-       quantile_cont(value, 0.75) AS p75,
-       quantile_cont(value, 0.90) AS p90,
+       quantile_cont(value, [0.10, 0.25, 0.50, 0.75, 0.90]) AS q,
        min(value) AS min_value, max(value) AS max_value
 FROM tagged WHERE value IS NOT NULL AND isfinite(value)
 GROUP BY 1, 2, 4, 5, 6, 7
@@ -92,9 +91,7 @@ UNION ALL
 SELECT industry_scheme, industry_code, any_value(industry_label),
        fy, basis, 'ALL' AS size_band, ratio,
        count(DISTINCT cik),
-       quantile_cont(value, 0.10), quantile_cont(value, 0.25),
-       quantile_cont(value, 0.50), quantile_cont(value, 0.75),
-       quantile_cont(value, 0.90),
+       quantile_cont(value, [0.10, 0.25, 0.50, 0.75, 0.90]),
        min(value), max(value)
 FROM tagged WHERE value IS NOT NULL AND isfinite(value)
 GROUP BY 1, 2, 4, 5, 6, 7
@@ -109,7 +106,8 @@ SELECT n.industry_scheme, n.industry_code, n.industry_label, n.size_band, n.fy, 
        round(100.0 * n.companies_with_value / nullif(d.companies_total, 0), 1)
            AS coverage_pct,
        n.companies_with_value >= {SUFFICIENT} AS is_sufficient,
-       n.p10, n.p25, n.p50, n.p75, n.p90, n.min_value, n.max_value
+       n.q[1] AS p10, n.q[2] AS p25, n.q[3] AS p50, n.q[4] AS p75, n.q[5] AS p90,
+       n.min_value, n.max_value
 FROM numer n
 JOIN denom d
   ON d.industry_scheme = n.industry_scheme AND d.industry_code = n.industry_code
@@ -217,6 +215,12 @@ def guard_join_key(con) -> None:
 
 def main() -> None:
     con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
+    # A MotherDuck connection has no usable default spill location: when the first run
+    # needed to spill it tried to create a directory named after the whole connection
+    # string, token and all, and failed with "File name too long". Aggregating 13.2m rows
+    # will spill, so point it somewhere real before starting.
+    con.execute("SET temp_directory = '/tmp/duckdb_spill'")
+    con.execute("SET preserve_insertion_order = false")
     con.execute("CREATE SCHEMA IF NOT EXISTS marts")
     guard_join_key(con)
 

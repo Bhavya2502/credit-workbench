@@ -114,7 +114,7 @@ DESCRIBED: dict[str, tuple[str, str]] = {
         "one row per (company, proxy filing)",
         "Management Risk inputs: audit and non-audit fee split, director counts, CEO "
         "pay ratio, related-party scale, policy flags. Coverage varies by metric from "
-        "38% to 75% - see DATA_GUIDE section 10 before scoring. directors_listed is "
+        "38% to 75% - see DATA_GUIDE section 11 before scoring. directors_listed is "
         "NULL where no director table was found and must not be read as zero."),
     "quali.exhibits": (
         "one row per (filing, exhibit document)",
