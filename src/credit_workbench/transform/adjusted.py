@@ -75,10 +75,17 @@ CREATE OR REPLACE TEMP TABLE base AS
 -- income statement and cash flow and silently discarded the entire balance sheet. The
 -- result was adjusted_leverage NULL on all 726,690 rows - and two invariants that
 -- "passed" only because a NULL comparison counts as neither true nor false.
+-- The period end is chosen from the *annual* flow and the balance sheet is then read at
+-- that same date. Choosing it across both was wrong: `fy` is derived from `period_end`, so
+-- a June year-end filer's Q1 balance sheet dated 30 September falls in the same `fy` as the
+-- annual period ending 30 June, and taking the later date anchored the whole company-year
+-- on a quarterly balance sheet from the following year. That cost 486,540 rows and turned
+-- median fixed-charge cover from +2.05 to -0.92, because earnings and balances no longer
+-- came from the same period.
 WITH picked AS (
     SELECT cik, fy, basis, max(period_end) AS period_end
     FROM marts.spread_lines
-    WHERE qtrs IN (0, 4) AND fy IS NOT NULL
+    WHERE qtrs = 4 AND fy IS NOT NULL
     GROUP BY cik, fy, basis
 ),
 lines AS (
@@ -116,8 +123,12 @@ SELECT cik, fy, basis,
            AS long_term_debt,
        coalesce(max(value) FILTER (WHERE line_code = 'short_term_debt'), 0)
            AS short_term_debt,
-       coalesce(max(value) FILTER (WHERE line_code = 'finance_lease_current'), 0)
-       + coalesce(max(value) FILTER (WHERE line_code = 'finance_lease_noncurrent'), 0)
+       -- Clamped for the same reason as the operating lease: a lease liability cannot be
+       -- negative, and an unclamped one put adjusted debt below reported debt on 57 rows,
+       -- since finance leases are added to the adjusted figure and not the reported one.
+       greatest(coalesce(max(value) FILTER (WHERE line_code = 'finance_lease_current'), 0)
+                + coalesce(max(value) FILTER (
+                      WHERE line_code = 'finance_lease_noncurrent'), 0), 0)
            AS finance_lease_debt,
        -- ASC 842 operating lease liability, straight off the balance sheet.
        nullif(coalesce(max(value) FILTER (WHERE line_code = 'operating_lease_current'), 0)
@@ -133,7 +144,11 @@ INPUTS = """
 CREATE OR REPLACE TEMP TABLE inputs AS
 SELECT cik, fy, basis,
        max(op_lease_liability) AS op_lease_liability,
-       max(op_lease_840_rent_expense) AS rent_840,
+       -- Clamped here rather than downstream. The clamp was applied to the combined
+       -- rent_or_lease_cost but the capitalisation branch reads rent_840 directly, so a
+       -- negative rent still reached the multiple - which is what left 15 negative
+       -- capitalised-lease figures and 5 rows where 8x capitalised less than 6x.
+       nullif(greatest(max(op_lease_840_rent_expense), 0), 0) AS rent_840,
        max(op_lease_840_total) AS op_lease_840_ladder,
        max(op_lease_discount_rate) AS discount_rate,
        max(pension_obligation) AS pension_obligation,
