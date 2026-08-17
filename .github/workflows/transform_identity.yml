@@ -1,0 +1,19 @@
+name: transform-identity
+# G-19: name resolution, collisions and filing spans — so a cohort cannot pick up a survivor.
+on:
+  workflow_dispatch:
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.identity
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_identity
