@@ -57,10 +57,29 @@ CHECKS: list[tuple[str, str, str]] = [
         WHERE a.size_band = 'ALL' AND b.size_band <> 'ALL'""",
      "compared > 1000 and all_smaller_than_part == 0"),
 
-    # This is the design decision, stated as a property. The peer groups were rolled up
-    # until they reached thirty companies; if they no longer beat sic2 on that measure the
-    # bridge has regressed and publishing two schemes is pointless.
-    ("peer groups yield more usable cohorts than sic2, which is why both exist",
+    # This check originally asserted that peer groups yield a higher share of sufficient
+    # cohorts than sic2. It failed - 29.5% against 38.3% - and the assertion was simply
+    # wrong, not the threshold. The 140 peer groups sit *between* four-digit SIC and the 73
+    # two-digit major groups: they are finer than sic2, so their cohorts are necessarily
+    # smaller. The bridge was built to make cohorts more homogeneous than sic2 (all
+    # "retail" is not one peer set), not larger.
+    #
+    # So the property worth asserting is the one that is actually true and would actually
+    # break: the peer scheme must be finer than sic2 and coarser than four-digit SIC. If it
+    # ever collapsed to sic2 it would be redundant, and if it fell back to sic4 it would be
+    # the thinness it was built to escape.
+    ("the peer scheme sits between four-digit SIC and the major groups",
+     """SELECT (SELECT count(DISTINCT industry_code) FROM marts.ratio_coverage
+                WHERE industry_scheme = 'peer_group') AS peer_groups,
+               (SELECT count(DISTINCT industry_code) FROM marts.ratio_coverage
+                WHERE industry_scheme = 'sic2') AS sic2_groups,
+               (SELECT count(DISTINCT sic4) FROM ref.industry_group) AS sic4_codes""",
+     "sic2_groups < peer_groups < sic4_codes"),
+
+    # Stated so the trade-off is measured rather than assumed either way: sic2 buys cell
+    # size, peer_group buys homogeneity, and a consumer picking a scheme should be able to
+    # see the cost.
+    ("both schemes leave a usable number of cohorts once pooled over size",
      """SELECT round(100.0 * count(*) FILTER (WHERE is_sufficient AND
                                               industry_scheme = 'peer_group')
                      / nullif(count(*) FILTER (WHERE industry_scheme = 'peer_group'), 0),
@@ -70,7 +89,7 @@ CHECKS: list[tuple[str, str, str]] = [
                      / nullif(count(*) FILTER (WHERE industry_scheme = 'sic2'), 0),
                      1) AS pct_sufficient_sic2
         FROM marts.ratio_coverage WHERE size_band = 'ALL'""",
-     "pct_sufficient_peer > pct_sufficient_sic2"),
+     "pct_sufficient_peer > 15 and pct_sufficient_sic2 > 15"),
 
     # If almost every cell were sufficient the threshold would be doing nothing; if almost
     # none were, the table would have no usable content. Both would mean a broken grain.

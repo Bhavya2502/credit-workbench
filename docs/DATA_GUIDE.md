@@ -419,18 +419,24 @@ Grain: `industry_scheme × industry_code × size_band × fy × basis × ratio`. 
 `companies_total, companies_with_value, coverage_pct, is_sufficient, p10, p25, p50, p75,
 p90, min_value, max_value`.
 
-**Read `industry_scheme` first.** Every cohort appears twice:
+**Read `industry_scheme` first.** Every cohort appears twice, and the choice is a genuine
+trade-off — neither scheme dominates:
 
-| `industry_scheme` | What it is | Use when |
-|---|---|---|
-| `sic2` | the 73 two-digit major groups | you need SIC compatibility |
-| `peer_group` | the 140 groups above | you want a cohort big enough to draw a distribution from |
+| `industry_scheme` | Groups | Cohort size | Homogeneity |
+|---|---|---|---|
+| `sic2` | 73 | **larger** — 38.3% of pooled cells reach 30 companies | blunt: all "retail" is one peer set |
+| `peer_group` | 140 | smaller — 29.5% reach 30 | **finer**: warehouse clubs separated from apparel specialty |
 
-This exists because at `ratio × sic2 × size_band`, FY2024 gives 12,127 cells of which only
+The 140 peer groups sit *between* four-digit SIC and the major groups. They were built to be
+more homogeneous than `sic2`, **not larger** — being finer, their cohorts are necessarily
+smaller. Use `peer_group` when comparability matters more than sample size, `sic2` when you
+need the cell to be big enough at all, and `is_sufficient` (30+ companies with a value) to
+decide either way.
+
+Why the flag matters: at `ratio × sic2 × size_band`, FY2024 gives 12,127 cells of which only
 1,409 hold 30+ companies and 7,663 hold fewer than 10 — median 6. **A p10 and p90 over six
-companies are noise wearing a precise number.** `is_sufficient` (30+ companies with a
-value) is the flag to filter on; `size_band = 'ALL'` pools the sizes, which is often the
-only cut with enough companies.
+companies are noise wearing a precise number.** `size_band = 'ALL'` pools the sizes and is
+often the only cut with enough companies: it lifts the sufficient share from 2–17% to 29–41%.
 
 ```sql
 -- thresholds for a factor, only where the cohort can support them
