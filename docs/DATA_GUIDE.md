@@ -120,6 +120,9 @@ WHERE dimension_count = 1   -- this axis is the only one on the fact
 | **SIC hierarchy (group/division)** | `ref.sic_hierarchy` | — |
 | **Which ratios compute for a cohort, and their distribution** | `marts.ratio_coverage` | `is_sufficient` |
 | **How many credit events a cohort holds** | `marts.outcome_counts` | `can_calibrate_*` |
+| **Adjusted debt / EBITDAR / leverage / FFO** | `marts.adjusted_metrics` | pick a `policy` |
+| **What each adjustment policy assumes** | `ref.adjustment_policy` | — |
+| **The ASC 840 → 842 lease splice on its own** | `marts.lease_adjustment` | `lease_source` |
 
 ---
 
@@ -458,6 +461,55 @@ whole window pooled. Counts for `distress_12m/24m`, `default_12m/24m`, `bankrupt
 The pooled `fy IS NULL` row is usually the only one with enough events for a cohort. Source
 totals across the whole warehouse: 127,190 company-years, 21,778 `distress_12m`, 29,709
 `distress_24m`, 7,458 `default_24m`, 2,823 `bankruptcy_24m`.
+
+### `marts.adjusted_metrics` — agency-style adjusted figures
+
+One row per `cik × fy × basis × policy`. 726,845 rows, 15,108 companies. Columns: `ebit,
+dep_amort, ebitda, rent, ebitdar, reported_debt, finance_lease_debt, capitalised_leases,
+pension_deficit, adjusted_debt, ffo_approx, adjusted_leverage, fixed_charge_cover,
+ffo_to_adjusted_debt, lease_source`.
+
+**Pick a `policy` the way you pick a `basis`.** `ref.adjustment_policy` states exactly what
+each assumes, so nothing is inherited silently:
+
+| `policy` | Operating leases | Pension deficit |
+|---|---|---|
+| `reported` | not capitalised | excluded — **the baseline** |
+| `lease_8x` | reported liability, else 8× rent | in debt |
+| `lease_6x` | reported liability, else 6× rent | in debt |
+| `lease_only` | reported liability, else 8× rent | excluded |
+| `pension_only` | not capitalised | in debt |
+
+`lease_6x` exists so the sensitivity of a threshold to the multiple can be **measured**
+rather than argued. `reported` exists so the cost of every adjustment is visible.
+
+Three things to know before scoring on it:
+
+- **`adjusted_debt` is `NULL` when no debt line was reported**, not zero. Coalescing it to
+  zero produced a median leverage of 0.00 across 41,336 company-years. Same rule as
+  `directors_listed` — do not fill it.
+- **`ffo_approx` is named for what it is**: EBITDA less cash interest and cash tax. That is a
+  standard shape, not any agency's exact FFO, and this warehouse does not isolate the
+  further items they adjust for.
+- **Capitalising leases does not always raise leverage.** With leases at 8× rent, adjusted
+  leverage exceeds unadjusted exactly when unadjusted leverage is under 8× — above that the
+  adjustment lowers it. This is arithmetic, not a defect: `(debt + 8r)/(ebitda + r)` against
+  `debt/ebitda` reduces to `8·ebitda` against `debt`.
+
+### `marts.lease_adjustment` — the G-05 splice, stated once
+
+`reported_lease_liability, rent_840, op_lease_840_ladder, discount_rate,
+rent_or_lease_cost, lease_source`.
+
+**The rule: use the reported lease liability wherever it exists; otherwise capitalise the
+rent.** The handover is clean enough to be a rule rather than an estimate — the balance-sheet
+liability appears in 17 filings for FY2017 and 115 for FY2018, then **11,522 for FY2019** when
+ASC 842 took effect, while the old rent disclosure falls from 2,882 in FY2014 to 21 by
+FY2025. Only 1,203 of 452,942 rows carry both.
+
+`lease_source` records which era each row came from (`asc842_reported_liability`,
+`rent_capitalised`, `asc840_ladder_only`, `none`). The raw columns are untouched, so your own
+splice remains possible — this one is a *named* option to cite, not a default forced on you.
 
 ---
 
