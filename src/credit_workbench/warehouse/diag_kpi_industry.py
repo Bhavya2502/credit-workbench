@@ -67,9 +67,15 @@ def coverage_query() -> str:
             f"count(DISTINCT cik) FILTER (WHERE sic2 NOT IN ({sic_list}) "
             f"                              AND t LIKE '%{phrase}%') AS outside_industry "
             f"FROM tagged")
-    return ("WITH tagged AS (\n"
-            "    SELECT m.cik, c.sic2, lower(m.text) AS t\n"
-            "    FROM quali.mdna m JOIN ref.dim_company c ON c.cik = m.cik\n"
+    # sic2 comes from marts.ratio_values, not ref.dim_company, which carries `sic` and no
+    # `sic2` - the column probe said so and I wrote the query without consulting it. Using
+    # ratio_values also restricts to companies that have financials, which is the universe
+    # a scorecard can use anyway.
+    return ("WITH ind AS (\n"
+            "    SELECT DISTINCT cik, sic2 FROM marts.ratio_values WHERE fy >= 2022),\n"
+            "tagged AS (\n"
+            "    SELECT m.cik, i.sic2, lower(m.text) AS t\n"
+            "    FROM quali.mdna m JOIN ind i ON i.cik = m.cik\n"
             "    WHERE substr(m.filing_date, 1, 4) BETWEEN '2022' AND '2025')\n"
             + "\nUNION ALL\n".join(parts))
 
@@ -137,15 +143,15 @@ def main() -> None:
     print("\n### 3. How many companies are in each candidate industry at all?")
     try:
         cur = con.execute("""
-            SELECT c.sic2, any_value(c.sic_description) AS example,
+            SELECT r.sic2, any_value(c.sic_description) AS example,
                    count(DISTINCT r.cik) AS companies_with_ratios
             FROM marts.ratio_values r
-            JOIN ref.dim_company c ON c.cik = r.cik
+            LEFT JOIN ref.dim_company c ON c.cik = r.cik
             WHERE r.fy = 2024
-              AND c.sic2 IN ('10','12','13','14','29','35','36','37','38','45',
+              AND r.sic2 IN ('10','12','13','14','29','35','36','37','38','45',
                              '48','49','53','54','56','57','58','59','65','67',
                              '70','73','80')
-            GROUP BY c.sic2 ORDER BY companies_with_ratios DESC""")
+            GROUP BY r.sic2 ORDER BY companies_with_ratios DESC""")
         for r in cur.fetchall():
             print(f"  {r[0]:<5} {str(r[1])[:50]:<52} {r[2]:>6,}")
     except Exception as exc:
