@@ -1,0 +1,19 @@
+name: transform-kpis
+# G-08: disclosed operating KPIs, dictionary-driven. No fetching required.
+on:
+  workflow_dispatch:
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.kpis
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_kpis
