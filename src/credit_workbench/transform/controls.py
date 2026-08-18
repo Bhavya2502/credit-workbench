@@ -78,13 +78,26 @@ flagged AS (
            regexp_matches(t, '{FOUND}') AS weakness_found,
            regexp_matches(t, '{DEFN}') AS has_definition,
            regexp_matches(t, '{REMED}') AS remediation_discussed,
-           coalesce(
-               nullif(regexp_extract(t, '[^.]{{0,140}}{NEG_AFTER}[^.]{{0,60}}'), ''),
-               nullif(regexp_extract(t, '[^.]{{0,140}}{NEG_BEFORE}[^.]{{0,60}}'), ''),
-               nullif(regexp_extract(t, '[^.]{{0,140}}{POS_AFTER}[^.]{{0,60}}'), ''),
-               nullif(regexp_extract(t, '[^.]{{0,140}}{POS_BEFORE}[^.]{{0,60}}'), '')
-           ) AS sentence
+           t
     FROM s
+),
+witnessed AS (
+    -- The evidence sentence is extracted only for the pattern that actually matched.
+    -- A coalesce over four regexp_extract calls evaluates all four on every one of
+    -- 116,812 sections, and each one scans the whole document twice over for the
+    -- surrounding context. A CASE does one.
+    SELECT * EXCLUDE (t),
+           CASE
+               WHEN neg_after THEN
+                   regexp_extract(t, '[^.]{{0,140}}{NEG_AFTER}[^.]{{0,60}}')
+               WHEN neg_before THEN
+                   regexp_extract(t, '[^.]{{0,140}}{NEG_BEFORE}[^.]{{0,60}}')
+               WHEN pos_after THEN
+                   regexp_extract(t, '[^.]{{0,140}}{POS_AFTER}[^.]{{0,60}}')
+               WHEN pos_before THEN
+                   regexp_extract(t, '[^.]{{0,140}}{POS_BEFORE}[^.]{{0,60}}')
+           END AS sentence
+    FROM flagged
 )
 SELECT cik, adsh, filing_date, fy, char_len,
        CASE
@@ -109,7 +122,7 @@ SELECT cik, adsh, filing_date, fy, char_len,
        has_definition AS carries_weakness_definition,
        remediation_discussed,
        regexp_replace(trim(sentence), '[ ]+', ' ', 'g') AS conclusion_sentence
-FROM flagged
+FROM witnessed
 """
 
 
