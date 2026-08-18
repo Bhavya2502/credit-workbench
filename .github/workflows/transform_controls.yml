@@ -1,0 +1,19 @@
+name: transform-controls
+# The controls pillar: management ICFR conclusion from Item 9A. No fetching required.
+on:
+  workflow_dispatch:
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.controls
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_controls
