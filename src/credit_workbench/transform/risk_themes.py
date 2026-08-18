@@ -20,7 +20,7 @@ headed items, and the headings survive the conversion intact:
 One heading is one risk the issuer chose to disclose, which is what the request actually
 wants counted. Length alone does not find them - the median line in these sections is 134
 characters, so a length window catches body paragraphs too. What does find them is the
-formula they are written to: a risk followed by an adverse consequence. `HEADING_SHAPE`
+formula they are written to: a risk followed by an adverse consequence. `CONSEQUENCE`
 below is that formula, and it is why this works where a length filter did not.
 
 **Not every theme is a factor, and the mart says so.** Cyber security appears in 85-99% of
@@ -31,7 +31,13 @@ between the highest and lowest industry for each theme, so a scorecard can tell 
 discriminating theme from a universal one rather than weighting cyber and wondering why it
 does nothing.
 
-**Cost.** `staging.risk_headings` is permanent and fingerprinted on the heading rule, for
+**Cost.** The headings are extracted one filing year at a time. Whole-corpus extraction ran
+MotherDuck out of memory, and the trick that saved G-08 - discarding sections before
+exploding them - is useless here, because every risk-factor section contains consequence
+language by definition. Risk sections are also far larger than MD&A: a median of 52,374
+characters against a maximum over a million.
+
+`staging.risk_headings` is permanent and fingerprinted on the heading rule, for
 the reason G-08 learned the hard way: the narrative scan is the whole expense, it does not
 depend on the theme vocabulary, and iterating on themes should not pay for it again. Change
 the vocabulary and the headings are reused; change the heading rule and they rebuild
@@ -122,10 +128,21 @@ CREATE OR REPLACE TABLE ref.risk_theme_dictionary (
 """
 
 
-def headings_table() -> str:
-    """One pass over Item 1A, keeping the lines that read like risk headings."""
+def headings_table(year: str, first: bool) -> str:
+    """One filing year of Item 1A, keeping the lines that read like risk headings.
+
+    Year at a time, because the whole corpus at once ran MotherDuck out of memory. The
+    trick that saved the KPI build - discarding sections before exploding them - cannot
+    work here: every risk-factor section contains consequence language by definition, so
+    the section filter removes nothing. Risk sections are also far larger than MD&A, a
+    median of 52,374 characters against a maximum over a million, so 108,159 of them
+    explode into tens of millions of lines in one go. A year is about six thousand
+    sections and comfortably fits.
+    """
+    verb = ("CREATE OR REPLACE TABLE staging.risk_headings AS" if first
+            else "INSERT INTO staging.risk_headings")
     return f"""
-CREATE OR REPLACE TABLE staging.risk_headings AS
+{verb}
 WITH ind AS (
     SELECT DISTINCT cik, sic2 FROM marts.ratio_values WHERE fy >= 2015
 ),
@@ -134,7 +151,7 @@ src AS (
            TRY_CAST(substr(r.period_of_report, 1, 4) AS INTEGER) AS fy, r.text
     FROM quali.risk_factors r
     JOIN ind i ON i.cik = r.cik
-    WHERE substr(r.filing_date, 1, 4) >= '2015' AND r.char_len > 5000
+    WHERE substr(r.filing_date, 1, 4) = '{year}' AND r.char_len > 5000
 ),
 exploded AS (
     SELECT cik, sic2, adsh, filing_date, fy,
@@ -235,8 +252,14 @@ def main() -> None:
     if args.refresh_headings or not exists or not have or have[0] != fingerprint:
         why = ("asked for" if args.refresh_headings else
                "absent" if not exists else "heading rule changed")
-        print(f"building staging.risk_headings ({why}) - one pass over Item 1A")
-        con.execute(headings_table())
+        print(f"building staging.risk_headings ({why}) - one filing year at a time")
+        years = [r[0] for r in con.execute("""
+            SELECT DISTINCT substr(filing_date, 1, 4) AS y FROM quali.risk_factors
+            WHERE substr(filing_date, 1, 4) >= '2015' ORDER BY y""").fetchall()]
+        for i, year in enumerate(years):
+            con.execute(headings_table(year, first=(i == 0)))
+            got = con.execute("SELECT count(*) FROM staging.risk_headings").fetchone()[0]
+            print(f"  {year}: {got:,} headings so far")
         n = con.execute("SELECT count(*) FROM staging.risk_headings").fetchone()[0]
         con.execute("INSERT INTO staging.risk_headings_build VALUES (?, now(), ?)",
                     [fingerprint, n])
