@@ -39,6 +39,9 @@ phrase in its own SELECT timed out after an hour without producing a row.
 """
 from __future__ import annotations
 
+import argparse
+import hashlib
+
 import duckdb
 
 from credit_workbench.common.config import motherduck_token
@@ -100,7 +103,7 @@ def lines_table(phrases: list[str]) -> str:
     """
     alt = "|".join(p.replace(" ", r"\s+") for p in phrases)
     return f"""
-CREATE OR REPLACE TEMP TABLE kpi_lines AS
+CREATE OR REPLACE TABLE staging.kpi_lines AS
 WITH ind AS (
     SELECT DISTINCT cik, sic2 FROM marts.ratio_values WHERE fy >= 2019
 ),
@@ -192,7 +195,7 @@ SELECT cik, fy, '{kpi}' AS kpi, section, adsh,
        '{unit}' AS expected_unit,
        {lo} AS min_value, {hi} AS max_value,
        line AS source_sentence
-FROM kpi_lines
+FROM staging.kpi_lines
 WHERE sic2 IN ({sic_list})
   AND regexp_matches(lower(line), '{value_re}')
   {scale_guard}
@@ -232,6 +235,10 @@ FROM ranked WHERE rn = 1
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--refresh-lines", action="store_true",
+                    help="rebuild the candidate-line table even if the phrases are unchanged")
+    args = ap.parse_args()
     con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
     con.execute("SET temp_directory = '/tmp/duckdb_spill'")
     con.execute("SET preserve_insertion_order = false")
@@ -244,10 +251,38 @@ def main() -> None:
     print(f"table ref.kpi_dictionary  {len(DICTIONARY)} KPIs across "
           f"{len({d[3] for d in DICTIONARY})} industry groups")
 
+    # The narrative scan is the whole cost of this build and it does not depend on any of
+    # the extraction logic below, which has now been revised four times. So it is a
+    # permanent table, rebuilt only when the phrase list it was derived from changes.
+    #
+    # The stored fingerprint is what makes that safe. Adding a KPI to the dictionary
+    # without refreshing the lines would leave the new entry silently producing nothing -
+    # a table that looks built and is quietly incomplete, which is the failure this
+    # warehouse keeps meeting.
     phrases = [d[2] for d in DICTIONARY]
-    con.execute(lines_table(phrases))
-    n = con.execute("SELECT count(*) FROM kpi_lines").fetchone()[0]
-    print(f"temp  kpi_lines  {n:,} candidate lines (one pass over the narrative)")
+    fingerprint = hashlib.sha256("|".join(sorted(phrases)).encode()).hexdigest()[:16]
+    con.execute("CREATE SCHEMA IF NOT EXISTS staging")
+    con.execute("""CREATE TABLE IF NOT EXISTS staging.kpi_lines_build
+                   (fingerprint VARCHAR, built_at TIMESTAMP, lines BIGINT)""")
+    have = con.execute(
+        "SELECT fingerprint FROM staging.kpi_lines_build ORDER BY built_at DESC LIMIT 1"
+    ).fetchone()
+    exists = con.execute("""SELECT count(*) FROM information_schema.tables
+                            WHERE table_schema = 'staging'
+                              AND table_name = 'kpi_lines'""").fetchone()[0]
+
+    if args.refresh_lines or not exists or not have or have[0] != fingerprint:
+        why = ("asked for" if args.refresh_lines else
+               "absent" if not exists else "phrase list changed")
+        print(f"building staging.kpi_lines ({why}) - one pass over the narrative")
+        con.execute(lines_table(phrases))
+        n = con.execute("SELECT count(*) FROM staging.kpi_lines").fetchone()[0]
+        con.execute("INSERT INTO staging.kpi_lines_build VALUES (?, now(), ?)",
+                    [fingerprint, n])
+    else:
+        n = con.execute("SELECT count(*) FROM staging.kpi_lines").fetchone()[0]
+        print("reusing staging.kpi_lines - phrase list unchanged")
+    print(f"table staging.kpi_lines  {n:,} candidate lines")
 
     branches = "\n    UNION ALL\n".join(
         extract_for(d[0], d[2], d[3], d[4], d[5], d[6]) for d in DICTIONARY)
