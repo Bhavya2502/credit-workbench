@@ -142,7 +142,12 @@ def extract_for(kpi: str, phrase: str, sics: str, unit: str,
     decide, which they cannot do with a row that was silently dropped.
     """
     sic_list = ", ".join(f"'{s}'" for s in sics.split(","))
-    pat = phrase.replace(" ", r"\\s+")
+    # One backslash, not two. `lines_table` uses r"\s+" and this used r"\\s+", and DuckDB
+    # does not process backslash escapes in string literals - so the regex engine saw a
+    # literal backslash followed by "s" and every multi-word phrase matched nothing. The
+    # tell was unmissable once it ran: exactly three KPIs produced rows, and they were
+    # exactly the three single-word phrases in the dictionary.
+    pat = phrase.replace(" ", r"\s+")
     return f"""
 SELECT cik, fy, '{kpi}' AS kpi, section, adsh,
        TRY_CAST(replace(regexp_extract(lower(line),

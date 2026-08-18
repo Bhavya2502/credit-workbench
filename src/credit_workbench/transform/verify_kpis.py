@@ -34,14 +34,19 @@ CHECKS: list[tuple[str, str, str]] = [
 
     # The scope is the precision mechanism. "backlog" fires on 477 companies outside
     # SIC 35/36/37; if any of them appear here the scoping has failed.
+    # A company's SIC can change between years, so joining every (cik, sic2) pair fans out
+    # and reports a violation whenever any of a company's codes is out of scope. The
+    # extraction only ever needed *one* of them to be in scope, so the check aggregates to
+    # the company first. The first version counted 122 false violations this way.
     ("every KPI stays inside the industry it was scoped to",
-     """SELECT count(*) AS rows, count(*) FILTER (WHERE NOT scoped) AS out_of_scope
-        FROM (
-            SELECT k.kpi,
-                   list_contains(str_split(d.sic2_groups, ','), r.sic2) AS scoped
-            FROM marts.disclosed_kpis k
-            JOIN ref.kpi_dictionary d ON d.kpi = k.kpi
-            JOIN (SELECT DISTINCT cik, sic2 FROM marts.ratio_values) r ON r.cik = k.cik)""",
+     """WITH company_sics AS (
+            SELECT cik, list(DISTINCT sic2) AS sics FROM marts.ratio_values GROUP BY cik)
+        SELECT count(*) AS rows,
+               count(*) FILTER (WHERE NOT list_has_any(
+                   c.sics, str_split(d.sic2_groups, ','))) AS out_of_scope
+        FROM marts.disclosed_kpis k
+        JOIN ref.kpi_dictionary d ON d.kpi = k.kpi
+        JOIN company_sics c ON c.cik = k.cik""",
      "rows > 2000 and out_of_scope == 0"),
 
     ("no value escapes the range its own dictionary entry declares",
