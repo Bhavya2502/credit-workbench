@@ -129,6 +129,8 @@ WHERE dimension_count = 1   -- this axis is the only one on the fact
 | **Management's ICFR conclusion** | `marts.control_signals` | `icfr_conclusion` |
 | **Disclosed operating KPIs (RevPAR, load factor…)** | `marts.disclosed_kpis` | `confidence='high'` |
 | **What each KPI phrase covers** | `ref.kpi_dictionary` | — |
+| **Which risks an issuer actually discloses** | `marts.risk_themes` | — |
+| **Whether a risk theme discriminates by industry** | `marts.risk_theme_prevalence` | `discriminates` |
 
 ---
 
@@ -610,6 +612,38 @@ produced it. Values are read only where the text carries the metric's own mark �
 sign for a percentage, a currency mark for money — because an earlier version that took the
 nearest number produced a 2% load factor from a revenue sentence, inside its declared range
 and indistinguishable from a real one.
+
+---
+
+### `marts.risk_themes` — which risks an issuer actually raises (G-09)
+
+Grain `cik × adsh × theme`. 414,570 rows, 10,136 companies, 57,547 filings, 20 themes,
+2015–2026. Columns: `fy, sic2, filing_date, theme, headings_for_theme, example_heading`.
+`ref.risk_theme_dictionary` holds the pattern behind each theme.
+
+**Classified on risk-factor headings, not body text — and the difference is the whole
+point.** Every Item 1A section of any length mentions every common risk somewhere, so
+body-text classification marks 90%+ of issuers with almost everything: regulation 95.9%,
+competition 94.1%, cyber 89.8%. At heading grain the average theme sits at **34.7%**, because
+a heading is one risk the issuer chose to disclose rather than one passing mention. Cyber
+falls from 89.8% to 37.4%.
+
+A median filing yields 20 headings and 7 themes. `example_heading` is the verbatim text, so
+any count is checkable back to the filing.
+
+### `marts.risk_theme_prevalence` — the aggregate, with a usability flag
+
+Grain `theme × sic2 × fy`, restricted to industry-years with 20+ issuers. Columns
+`issuers_with_theme, issuers_total, issuer_share, industry_spread_pp, discriminates`.
+
+**`discriminates` is the column to filter on.** It marks themes whose share varies by 20+
+percentage points between industries. A theme every industry raises equally cannot separate
+them however well it is extracted — and at body-text grain almost nothing discriminated at
+all. Widest spreads: insurance 75.8pp, supply chain 74.3pp, intellectual property 72.1pp.
+Narrowest: customer concentration 16.9pp, the one theme flagged `false`.
+
+Sanity, for calibration: climate is raised by 58.2% of oil and gas issuers against 23.4% of
+pharmaceutical ones.
 
 ---
 

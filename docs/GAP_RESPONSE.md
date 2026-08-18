@@ -152,8 +152,25 @@ its declared range, marked high confidence, indistinguishable from a real value.
 now read only where the text carries the metric's own mark, and every row keeps
 `source_sentence` so you can check any figure against the filing.
 
-### G-09 · Risk themes — **not started**
-Still the right call and the raw material is in the lake. Not small.
+### G-09 · Risk themes — **built**
+`marts.risk_themes` at `cik × adsh × theme`: 414,570 rows, 10,136 companies, 57,547 filings,
+20 themes, 2015–2026, each row carrying the verbatim heading as you asked.
+`marts.risk_theme_prevalence` is the `theme × sic2 × fy` aggregate.
+
+**Classified on headings, not body text, and you would not have wanted the alternative.**
+Body-text classification marks 95.9% of filers with regulation, 94.1% with competition, 89.8%
+with cyber — every issuer mentions every common risk somewhere in fifty thousand characters.
+That mart would have looked authoritative and separated nobody. At heading grain the average
+theme sits at 34.7%, because a heading is one risk the issuer *chose to disclose*. Cyber falls
+from 89.8% to 37.4%. A median filing yields 20 headings and 7 themes.
+
+**Use `discriminates` before weighting anything.** It marks themes whose share varies by 20+
+points between industries. Insurance spreads 75.8pp, supply chain 74.3pp, intellectual
+property 72.1pp; customer concentration spreads 16.9pp and is flagged `false`. A theme every
+industry raises equally cannot separate them however well it is extracted.
+
+Calibration check you can repeat: climate is raised by 58.2% of oil and gas issuers against
+23.4% of pharmaceutical ones.
 
 ### The controls pillar — **built, and not on your list**
 `marts.control_signals`: management's ICFR conclusion from Item 9A, 116,812 rows, 18,496
