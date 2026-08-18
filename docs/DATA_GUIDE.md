@@ -131,6 +131,8 @@ WHERE dimension_count = 1   -- this axis is the only one on the fact
 | **What each KPI phrase covers** | `ref.kpi_dictionary` | — |
 | **Which risks an issuer actually discloses** | `marts.risk_themes` | — |
 | **Whether a risk theme discriminates by industry** | `marts.risk_theme_prevalence` | `discriminates` |
+| **A saved, reusable peer set** | `marts.cohorts`, `marts.cohort_members` | pick a `cohort_id` |
+| **What a cohort's criteria are** | `ref.cohort_definition` | — |
 
 ---
 
@@ -644,6 +646,36 @@ Narrowest: customer concentration 16.9pp, the one theme flagged `false`.
 
 Sanity, for calibration: climate is raised by 58.2% of oil and gas issuers against 23.4% of
 pharmaceutical ones.
+
+---
+
+### `marts.cohorts` / `marts.cohort_members` — saved peer sets (G-18)
+
+Ten seeded cohorts, 76,198 company-year memberships. `ref.cohort_definition` holds the
+criteria (industry codes, size bands, year range, revenue floor) so a cohort can be
+re-resolved; `marts.cohort_members` holds who matched when it was last resolved, so a
+threshold cut earlier stays reproducible after new filings land. **Adding a cohort is an
+`INSERT` into `ref.cohort_definition`.**
+
+`marts.cohorts` carries `companies, company_years, distress_24m, default_24m,
+companies_stopped_filing, companies_ambiguous_name, can_calibrate_default,
+can_calibrate_distress, resolved_at`.
+
+**These cohorts deliberately contain companies that no longer exist.** Overall **44.6% of
+members stopped filing before 2025**, and 506 have a bankruptcy outcome — energy 61.5%
+stopped, retail 51.6%, large-cap only 11.2%. That is the point: a cohort built from a live
+ticker file drops exactly the companies whose outcomes you are calibrating against, and looks
+complete while doing it. An invariant asserts no cohort is survivor-only.
+
+**`name_is_ambiguous` flags, it does not filter.** 918 member companies carry a name that
+belonged to a different CIK at some point. They are kept because 40 companies in a name
+collision have a bankruptcy outcome; dropping them would remove the observations that matter
+most. Resolution is by CIK throughout — the flag warns against joining to anything external
+by name.
+
+`can_calibrate_default` (30+ default events) is the gate. Of the ten seeded cohorts, nine
+clear it; `airlines_all` does not, at 29 defaults across 49 companies — which is the flag
+doing its job rather than a defect.
 
 ---
 

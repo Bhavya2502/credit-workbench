@@ -201,13 +201,35 @@ from their owner.
 |---|---|
 | G-16 `ref.sic_naics` empty | **confirmed, not loaded.** Ask yourself whether you still need NAICS now that `ref.industry_group` exists — it was built for exactly the cohorting you wanted NAICS for |
 | G-17 grouping above SIC2 | **existed**; now documented |
-| G-18 named cohorts | not built |
+| G-18 named cohorts | **built** — `marts.cohorts` + `marts.cohort_members`, 10 seeded, 76,198 memberships. See below |
 | G-19 survivorship | **answered and extended** — see below |
 | G-20 superseded tables | **not renamed, deliberately** — a second workstream shares this database and a rename breaks it silently. Documented loudly in §7 instead. Say the word and we will rename |
 | G-21 `cik` type | `marts.governance_metrics` moved VARCHAR → BIGINT. 44 tables BIGINT, 18 VARCHAR now. The class remains; cast both sides |
 | G-22 concentration vintage | **already fixed**; stale caveat withdrawn |
 | G-23 defects to keep visible | all retained, and `material_weakness` now has a *probable cause* — it matches the phrase, and Item 9A carries the definition as boilerplate |
 | G-24 compute budget | G-02 and G-03 are materialised precisely to keep you off the 222m-row tables |
+
+### G-18 · Named cohorts — **built, and they keep the dead companies**
+`ref.cohort_definition` holds the criteria so a cohort re-resolves as the warehouse grows;
+`marts.cohort_members` records who matched when it was last resolved, so a threshold you cut
+last month is still reproducible after new filings land. Adding one is an INSERT.
+
+Your worked example resolves: **`us_retail_large` — 199 companies, 1,288 company-years, 138
+defaults, 175 distress events**, against `us_retail_all` at 450 companies, so the revenue
+floor bites as intended.
+
+**44.6% of all members stopped filing before 2025 and 506 have a bankruptcy outcome.** That
+is deliberate and it is the direct answer to the failure you described: energy 61.5% stopped
+filing, retail 51.6%, large-cap 11.2%. An invariant asserts no cohort is survivor-only,
+because a cohort built from live constituents drops precisely the companies you are
+calibrating against while looking complete.
+
+`can_calibrate_default` gates on 30+ events. Nine of ten seeded cohorts clear it;
+`airlines_all` does not, at 29 defaults across 49 companies — the flag working, not a defect.
+
+918 member companies carry an ambiguous name. They are **flagged, not dropped**: 40 companies
+in a name collision have a bankruptcy outcome, so removing them would lose the observations
+that matter most.
 
 ### G-19 · Survivorship — the answer is better than the question
 
