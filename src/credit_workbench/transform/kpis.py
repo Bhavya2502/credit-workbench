@@ -110,6 +110,12 @@ src AS (
     FROM quali.filing_sections s
     JOIN ind i ON i.cik = s.cik
     WHERE s.item IN ('1', '7') AND substr(s.filing_date, 1, 4) >= '2019'
+      -- Discard whole sections before exploding them. Unnesting first turns 1.79m
+      -- sections into hundreds of millions of lines and then throws away all but a few
+      -- thousand; MotherDuck failed to commit the intermediate outright. Testing the
+      -- section for the same alternation costs one regex per section and removes the
+      -- explosion, because only a few per cent of sections mention any KPI at all.
+      AND regexp_matches(lower(s.text), '{alt}')
 ),
 exploded AS (
     SELECT cik, sic2, adsh, section, fy,
