@@ -123,8 +123,49 @@ Measured: in FY2024 MD&A alone, 541 sections mention Moody's, 324 S&P, 261 Fitch
 5,801. Across eight years that is a usable reference set at no licensing cost, as you
 suggested. Not started.
 
-### G-08 · Disclosed KPIs · G-09 · Risk themes — **not started**
-Both remain the right calls and the raw material is in the lake. Neither is small.
+### G-08 · Disclosed KPIs — **built, and smaller than you expect**
+`marts.disclosed_kpis`, grain `cik × fy × kpi`: 1,449 rows, 396 companies, 16 KPIs.
+`ref.kpi_dictionary` holds each phrase, its industry scope, expected unit, plausible range
+and measured coverage — **adding an industry is an INSERT**, which is what makes your
+industry-by-industry plan workable.
+
+Three things you need before weighting anything on it.
+
+**Coverage is thin, and that is the disclosure rather than the extractor.** Within its own
+industry a KPI is mentioned by 5–68% of companies, median ~21%: proved reserves 56.5% of 191
+energy filers, load factor 46.7% of 30 airlines, FFO 22.9% of 899 REITs, megawatt hours 5.4%
+of 168 utilities. Only about half those mentions carry a value on the same line.
+
+**Industry scope is the precision mechanism, not a nicety.** "Backlog" appears for 477
+companies outside SIC 35/36/37, "average selling price" for 274 outside 36/38, "admissions"
+for 62 outside 80. They are ordinary English as often as metrics. Extraction runs only inside
+each KPI's own SIC groups; an invariant asserts nothing ever escapes.
+
+**19% of disclosures are unreachable** — bare table labels whose value the cell-per-line
+conversion at ingest stranded on another line. Recovering them needs 1.79m sections
+re-derived from source HTML, a re-fetch on the scale of the original ingest. Your call
+whether that is worth commissioning.
+
+A warning from building it: an earlier version took the nearest number to the phrase and
+produced a 2% load factor from "Passenger revenue increased $1.3 billion, or 3.3%" — inside
+its declared range, marked high confidence, indistinguishable from a real value. Values are
+now read only where the text carries the metric's own mark, and every row keeps
+`source_sentence` so you can check any figure against the filing.
+
+### G-09 · Risk themes — **not started**
+Still the right call and the raw material is in the lake. Not small.
+
+### The controls pillar — **built, and not on your list**
+`marts.control_signals`: management's ICFR conclusion from Item 9A, 116,812 rows, 18,496
+companies, 80,753 conclusions. **An adverse conclusion travels with 44.0% distress inside 24
+months against 17.8% for a clean one** — a 2.5× lift, stronger than most ratios in
+`marts.ratio_values`, and it needed no fetching.
+
+This also explains G-23's `material_weakness` puzzle. That signal matches the *phrase*, and
+Item 9A carries the definition of a material weakness as boilerplate — 8.4% of clean filers
+use the words. The phrase discriminates at 39.5% against 44.0% for the conclusion polarity.
+Both are published in `marts.control_signals` so the comparison stays measurable rather than
+becoming folklore.
 
 ---
 

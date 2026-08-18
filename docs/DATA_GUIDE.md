@@ -126,6 +126,9 @@ WHERE dimension_count = 1   -- this axis is the only one on the fact
 | **Every name a company has filed under** | `ref.company_names` | check `is_ambiguous` |
 | **Names one company left and another now uses** | `ref.name_collisions` | — |
 | **First and last filing date per company** | `ref.company_filing_span` | — |
+| **Management's ICFR conclusion** | `marts.control_signals` | `icfr_conclusion` |
+| **Disclosed operating KPIs (RevPAR, load factor…)** | `marts.disclosed_kpis` | `confidence='high'` |
+| **What each KPI phrase covers** | `ref.kpi_dictionary` | — |
 
 ---
 
@@ -549,6 +552,64 @@ a weaker proxy for failure than it looks: 63.7% of companies with a bankruptcy o
 stopped filing before 2024, but so did **43.6%** of those without one — acquisitions, going
 private and deregistration are indistinguishable from here. Derive your own flag if you must,
 knowing that.
+
+---
+
+### `marts.control_signals` — management's ICFR conclusion (the controls pillar)
+
+One row per Item 9A section: 116,812 rows, 18,496 companies, **80,753 carrying a
+conclusion (69%)**. Columns: `icfr_conclusion, icfr_pattern, conflicting_conclusions,
+disclosure_controls_conclusion, material_weakness_identified, carries_weakness_definition,
+remediation_discussed, conclusion_sentence`.
+
+**This is the strongest single text-derived signal in the warehouse.**
+
+| `icfr_conclusion` | Company-years | Distress within 24m |
+|---|---|---|
+| `not_effective` | 14,563 | **44.0%** |
+| `effective` | 57,465 | 17.8% |
+
+A 2.5× lift — better than most ratios in `marts.ratio_values`.
+
+**Do not use `material_weakness_identified` as the signal.** It is published for comparison
+and it discriminates *worse* (39.5% vs 44.0%), for the same reason
+`quali.note_signals.material_weakness` discriminates inversely: Item 9A carries the
+**definition** of a material weakness as boilerplate, so 8.4% of clean filers use the phrase.
+Use the polarity of the conclusion sentence.
+
+`icfr_conclusion` is `NULL` for 31% of sections — real controls discussions phrased in a way
+the patterns do not read. Not "effective". `conflicting_conclusions` (1.4%) marks filings
+stating both polarities, usually a weakness remediated since the prior year; the negative
+takes precedence and the conflict is flagged rather than resolved, because which year a
+sentence belongs to cannot be read off the sentence.
+
+### `marts.disclosed_kpis` — sector operating metrics from narrative (G-08)
+
+Grain `cik × fy × kpi`. 1,449 rows, 396 companies, 16 KPIs. Columns: `value, unit,
+expected_unit, source_section, source_sentence, adsh, confidence`.
+`ref.kpi_dictionary` states each KPI's phrase, industry scope, expected unit, plausible range
+and **measured within-industry coverage**.
+
+**Adding an industry is an `INSERT` into `ref.kpi_dictionary`** — the extractor is generic
+over it, and `staging.kpi_lines` rebuilds itself automatically when the phrase list changes.
+
+Three things to know before scoring on it:
+
+- **Coverage is thin and that is a property of the disclosure, not a defect.** Within its own
+  industry a KPI is mentioned by 5–68% of companies (median ~21%), and only about half of
+  those mentions carry a value on the same line. Check `ref.kpi_dictionary` before weighting.
+- **Industry scope is the precision mechanism.** "Backlog" appears for 477 companies *outside*
+  SIC 35/36/37, "average selling price" for 274 outside 36/38. Extraction only ever runs
+  inside a KPI's own SIC groups; that is what makes phrases this loose safe.
+- **19% of KPI disclosures are unreachable.** They are bare table labels whose value the
+  cell-per-line conversion at ingest stranded on another line. Recovering them needs 1.79m
+  sections re-derived from source HTML.
+
+Every row carries `source_sentence`, so any value is checkable against the filing that
+produced it. Values are read only where the text carries the metric's own mark — a percent
+sign for a percentage, a currency mark for money — because an earlier version that took the
+nearest number produced a 2% load factor from a revenue sentence, inside its declared range
+and indistinguishable from a real one.
 
 ---
 
