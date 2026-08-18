@@ -1,0 +1,19 @@
+name: transform-cohorts
+# G-18: named, reusable cohort definitions with membership recorded at a point in time.
+on:
+  workflow_dispatch:
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.transform.cohorts
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_cohorts
