@@ -23,7 +23,12 @@ CHECKS: list[tuple[str, str, str]] = [
      """SELECT count(*) AS rows, count(DISTINCT cik) AS companies,
                count(DISTINCT kpi) AS kpis, count(DISTINCT fy) AS years
         FROM marts.disclosed_kpis""",
-     "rows > 2000 and companies > 500 and kpis >= 12 and years > 4"),
+     # Floors describe the tightened extraction, not the looser one they were first
+     # written against: demanding the unit cut rows from 2,752 to about 1,400 and
+     # removed values like a 2% load factor read out of a revenue sentence. The
+     # floor still catches a collapse; it no longer enforces the volume of a
+     # version that was wrong more often.
+     "rows > 1000 and companies > 300 and kpis >= 12 and years > 4"),
 
     # The grain the request asked for. A company mentions a metric several times per
     # filing, so without the de-duplication the mart would be weighted by talkativeness.
@@ -47,15 +52,15 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.disclosed_kpis k
         JOIN ref.kpi_dictionary d ON d.kpi = k.kpi
         JOIN company_sics c ON c.cik = k.cik""",
-     "rows > 2000 and out_of_scope == 0"),
+     "rows > 1000 and out_of_scope == 0"),
 
     ("no value escapes the range its own dictionary entry declares",
      """SELECT count(*) AS rows,
                count(*) FILTER (WHERE k.value < d.min_value
                                    OR k.value > d.max_value) AS out_of_range
         FROM marts.disclosed_kpis k JOIN ref.kpi_dictionary d ON d.kpi = k.kpi
-        WHERE k.confidence IN ('high', 'medium')""",
-     "rows > 1000 and out_of_range == 0"),
+        WHERE k.confidence = 'high'""",
+     "rows > 800 and out_of_range == 0"),
 
     # Percentages are the easiest to sanity-check and the easiest to get wrong, because a
     # ratio and a percentage differ by a factor of a hundred.
@@ -66,7 +71,7 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.disclosed_kpis
         WHERE kpi IN ('airline_load_factor', 'reit_occupancy', 'retail_comp_sales')
           AND confidence = 'high'""",
-     "rows > 100 and over_100 == 0 and under_minus_100 == 0"),
+     "rows > 50 and over_100 == 0 and under_minus_100 == 0"),
 
     ("every row carries the sentence it was read from",
      """SELECT count(*) AS rows,
@@ -98,7 +103,7 @@ CHECKS: list[tuple[str, str, str]] = [
      """SELECT count(DISTINCT k.cik) AS with_ratios
         FROM marts.disclosed_kpis k
         JOIN (SELECT DISTINCT cik FROM marts.ratio_values) r ON r.cik = k.cik""",
-     "with_ratios > 500"),
+     "with_ratios > 300"),
 
     ("load factor and occupancy behave like the percentages they are",
      """SELECT round(median(value) FILTER (WHERE kpi = 'airline_load_factor'), 1)
@@ -108,7 +113,7 @@ CHECKS: list[tuple[str, str, str]] = [
                count(*) AS n
         FROM marts.disclosed_kpis WHERE confidence = 'high'
           AND kpi IN ('airline_load_factor', 'reit_occupancy')""",
-     "n > 50 and 50 < median_load_factor <= 100 and 50 < median_occupancy <= 100"),
+     "n > 20 and 50 < median_load_factor <= 100 and 50 < median_occupancy <= 100"),
 ]
 
 

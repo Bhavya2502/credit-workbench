@@ -162,15 +162,28 @@ def extract_for(kpi: str, phrase: str, sics: str, unit: str,
     # Requiring the percent sign for a percentage and the currency mark for a money figure
     # removes most of it, because the intervening quantities that were being caught are
     # rarely marked the same way as the metric itself.
+    trailing_re = None
     if unit == "percent":
         value_re = rf"{pat}[^0-9%]{{0,25}}([0-9][0-9,]*\.?[0-9]*)\s*%"
         unit_seen = "'percent'"
     elif unit == "dollar":
         value_re = rf"{pat}[^0-9$]{{0,25}}\$\s*([0-9][0-9,]*\.?[0-9]*)"
         unit_seen = "'dollar'"
+        # RevPAR survived the currency guard because the quantity stealing the match was
+        # also a dollar amount: "higher RevPAR, unit growth ($99 million)". Scale is what
+        # separates them - a per-unit metric is never followed by "million". RE2 has no
+        # lookahead, so the trailing words are captured and filtered in SQL below.
+        trailing_re = rf"{pat}[^0-9$]{{0,25}}\$\s*[0-9][0-9,]*\.?[0-9]*\s*[a-z]{{0,8}}"
     else:
         value_re = rf"{pat}[^0-9]{{0,25}}([0-9][0-9,]*\.?[0-9]*)"
         unit_seen = "'plain'"
+    # Only the per-unit metrics need it; an aggregate like backlog or ARR legitimately
+    # runs into millions.
+    per_unit = kpi in ('hotel_revpar', 'hotel_adr', 'telecom_arpu', 'semi_asp',
+                       'mining_aisc', 'restaurant_auv')
+    scale_guard = (
+        f"AND NOT regexp_matches(regexp_extract(lower(line), '{trailing_re}'), "
+        f"'million|billion|thousand')" if per_unit and trailing_re else "")
     return f"""
 SELECT cik, fy, '{kpi}' AS kpi, section, adsh,
        TRY_CAST(replace(regexp_extract(lower(line), '{value_re}', 1), ',', '')
@@ -182,6 +195,7 @@ SELECT cik, fy, '{kpi}' AS kpi, section, adsh,
 FROM kpi_lines
 WHERE sic2 IN ({sic_list})
   AND regexp_matches(lower(line), '{value_re}')
+  {scale_guard}
 """
 
 
