@@ -148,24 +148,40 @@ def extract_for(kpi: str, phrase: str, sics: str, unit: str,
     # tell was unmissable once it ran: exactly three KPIs produced rows, and they were
     # exactly the three single-word phrases in the dictionary.
     pat = phrase.replace(" ", r"\s+")
+
+    # The unit is demanded of the text rather than inferred afterwards, and the window is
+    # 25 characters rather than 60.
+    #
+    # Taking the first number within 60 characters produced values that passed every range
+    # check and were still wrong: a load factor of 2.00 read out of "Passenger revenue
+    # increased $1.3 billion, or 3.3%", and a RevPAR of 99 read out of "higher RevPAR, unit
+    # growth ($99 million)". Both sat inside their declared bounds, because 2% is a
+    # possible load factor and $99 is a possible RevPAR - which is this warehouse's
+    # standing failure: a wrong value looks exactly like a right one.
+    #
+    # Requiring the percent sign for a percentage and the currency mark for a money figure
+    # removes most of it, because the intervening quantities that were being caught are
+    # rarely marked the same way as the metric itself.
+    if unit == "percent":
+        value_re = rf"{pat}[^0-9%]{{0,25}}([0-9][0-9,]*\.?[0-9]*)\s*%"
+        unit_seen = "'percent'"
+    elif unit == "dollar":
+        value_re = rf"{pat}[^0-9$]{{0,25}}\$\s*([0-9][0-9,]*\.?[0-9]*)"
+        unit_seen = "'dollar'"
+    else:
+        value_re = rf"{pat}[^0-9]{{0,25}}([0-9][0-9,]*\.?[0-9]*)"
+        unit_seen = "'plain'"
     return f"""
 SELECT cik, fy, '{kpi}' AS kpi, section, adsh,
-       TRY_CAST(replace(regexp_extract(lower(line),
-           '{pat}[^0-9]{{0,60}}([0-9][0-9,]*\\.?[0-9]*)', 1), ',', '') AS DOUBLE) AS value,
-       CASE
-           WHEN regexp_matches(regexp_extract(lower(line),
-                '{pat}[^0-9]{{0,60}}[0-9][0-9,]*\\.?[0-9]*\\s*.{{0,3}}'), '%')
-               THEN 'percent'
-           WHEN regexp_matches(regexp_extract(lower(line),
-                '.{{0,12}}{pat}[^0-9]{{0,60}}[0-9]'), '\\$')
-               THEN 'dollar'
-           ELSE 'plain'
-       END AS unit_seen,
+       TRY_CAST(replace(regexp_extract(lower(line), '{value_re}', 1), ',', '')
+                AS DOUBLE) AS value,
+       {unit_seen} AS unit_seen,
        '{unit}' AS expected_unit,
        {lo} AS min_value, {hi} AS max_value,
        line AS source_sentence
 FROM kpi_lines
-WHERE sic2 IN ({sic_list}) AND regexp_matches(lower(line), '{pat}')
+WHERE sic2 IN ({sic_list})
+  AND regexp_matches(lower(line), '{value_re}')
 """
 
 
@@ -175,10 +191,12 @@ WITH raw AS (
     {branches}
 ),
 scored AS (
+    -- The unit is no longer part of confidence, because the pattern now demands it: a
+    -- percentage is only read where a percent sign follows and a money figure only where
+    -- a currency mark precedes. Scoring on a condition the extraction guarantees would be
+    -- a check that cannot fail, which is worse than no check.
     SELECT *,
-           value IS NOT NULL AND value BETWEEN min_value AND max_value AS in_range,
-           (unit_seen = expected_unit)
-             OR (expected_unit = 'count' AND unit_seen = 'plain') AS unit_agrees
+           value BETWEEN min_value AND max_value AS in_range
     FROM raw WHERE value IS NOT NULL
 ),
 ranked AS (
@@ -187,16 +205,14 @@ ranked AS (
     -- over it would be weighted by how talkative the filer is.
     SELECT *, row_number() OVER (
         PARTITION BY cik, fy, kpi
-        ORDER BY (in_range AND unit_agrees) DESC, in_range DESC,
-                 length(source_sentence) DESC) AS rn
+        ORDER BY in_range DESC, length(source_sentence) DESC) AS rn
     FROM scored
 )
 SELECT cik, fy, kpi, value, unit_seen AS unit, expected_unit,
        section AS source_section,
        substr(source_sentence, 1, 400) AS source_sentence,
        adsh,
-       CASE WHEN in_range AND unit_agrees THEN 'high'
-            WHEN in_range THEN 'medium' ELSE 'low' END AS confidence
+       CASE WHEN in_range THEN 'high' ELSE 'low' END AS confidence
 FROM ranked WHERE rn = 1
 """
 

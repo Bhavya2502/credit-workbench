@@ -76,11 +76,13 @@ CHECKS: list[tuple[str, str, str]] = [
         FROM marts.disclosed_kpis""",
      "no_evidence == 0 and bad_section == 0"),
 
-    ("confidence takes only its three values, and high is a real share",
+    # Confidence is two-valued now that the pattern demands the unit; the third level
+    # would have been unreachable, which is a check that cannot fail.
+    ("confidence takes only its declared values, and high is a real share",
      """SELECT count(DISTINCT confidence) AS levels,
                round(100.0 * count(*) FILTER (WHERE confidence = 'high')
                      / count(*), 1) AS pct_high,
-               count(*) FILTER (WHERE confidence NOT IN ('high', 'medium', 'low'))
+               count(*) FILTER (WHERE confidence NOT IN ('high', 'low'))
                    AS bad_values
         FROM marts.disclosed_kpis""",
      "bad_values == 0 and pct_high > 15"),
