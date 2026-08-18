@@ -1,0 +1,27 @@
+name: transform-risk-themes
+# G-09: risk factors classified by theme at heading grain. No fetching required.
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_headings:
+        description: "rebuild staging.risk_headings even if the rule is unchanged"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: >
+          uv run python -m credit_workbench.transform.risk_themes
+          ${{ inputs.refresh_headings && '--refresh-headings' || '' }}
+      - name: Verify
+        run: uv run python -m credit_workbench.transform.verify_risk_themes
