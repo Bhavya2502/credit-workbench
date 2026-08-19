@@ -102,6 +102,42 @@ def main() -> None:
     except Exception as exc:
         print(f"  (failed: {str(exc)[:190]})")
 
+    # G-13 asked for grain, coverage and years, not just names. Restricted to the tables
+    # that answer G-10 and G-13, because the Kaggle training sets drowned the identifier
+    # query in NAME_CONTRACT_TYPE columns.
+    print("\n### 4b. Grain, coverage and years for the relevant tables")
+    relevant = [
+        ("silver", "fdic_bank_financials"), ("gold", "us_bank_credit_quarterly"),
+        ("gold", "us_bank_credit_by_size"), ("gold", "india_corporate_lgd_panel"),
+        ("gold", "india_corporate_lgd_summary"), ("gold", "india_retail_pd_panel"),
+        ("gold", "india_retail_pd_summary"), ("silver", "ibbi_cirp_cases"),
+        ("silver", "ibbi_liquidation_cases"), ("silver", "ibbi_liquidation_waterfall"),
+        ("silver", "ibbi_voluntary_liquidations"), ("catalog", "source_registry"),
+    ]
+    for schema, table in relevant:
+        try:
+            n = con.execute(f"SELECT count(*) FROM {schema}.{table}").fetchone()[0]
+            cols = [r[0] for r in con.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = ? AND table_name = ?
+                ORDER BY ordinal_position""", [schema, table]).fetchall()]
+            dated = [c for c in cols
+                     if any(k in c.lower() for k in ("year", "date", "quarter", "period"))]
+            span = ""
+            if dated:
+                try:
+                    lo, hi = con.execute(
+                        f"SELECT min({dated[0]}), max({dated[0]}) FROM {schema}.{table}"
+                    ).fetchone()
+                    span = f"   {dated[0]}: {str(lo)[:10]} to {str(hi)[:10]}"
+                except Exception:  # noqa: BLE001  unorderable column type
+                    span = ""
+            print(f"  {schema}.{table:<32} {n:>10,} rows{span}")
+            print(f"      {', '.join(cols[:12])}"
+                  + (f" ... (+{len(cols) - 12} more)" if len(cols) > 12 else ""))
+        except Exception as exc:  # noqa: BLE001  not ours; report and continue
+            print(f"  {schema}.{table:<32} (unreadable: {str(exc)[:70]})")
+
     print("\n### 5. Anything India-shaped (G-13's actual subject)")
     try:
         cur = con.execute(f"""
