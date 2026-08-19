@@ -205,24 +205,59 @@ figure, never as a property-level source.
 Your framing is the right one: design can proceed provided the tool labels those KPIs
 honestly as analyst input.
 
-### G-13 · India data — **catalogued** (see `warehouse/diag_sibling_schemas.py`)
-We previously said this had to come from the schemas' owner. That was over-cautious —
-describing a table does not require owning it, and reading `information_schema` changes
-nothing. The catalogue is read-only: schemas, objects, column counts and every
-identifier-shaped column, so the India schemas can be assessed rather than guessed at.
+### G-13 · India data — **catalogued, and it is in a different database**
+First correction: `gold`, `silver` and `catalog` are **not schemas in `credit_workbench`**.
+They live in a separate MotherDuck database, **`credit_data`**, reachable by the same token.
+MotherDuck's `information_schema` spans every database a token can reach, which is why they
+looked local. Exposing any of it crosses a database boundary, not a schema one.
 
-What a catalogue cannot give you is **meaning**. Whether a column named `pd` holds a
-probability of default or a product code is the owner's to confirm, and we have not guessed.
+What is actually there, read-only:
 
-### G-10 · Bank regulatory data — **large, and possibly smaller than it looks**
-FFIEC Call Reports or the FDIC API is a new external source with new identifiers (RSSD, FDIC
-cert) and a CIK↔RSSD crosswalk — an ingest on the scale of the original SEC bulk load, not a
-transform. Not started, and we would want it commissioned deliberately rather than started
-on the side.
+| Table | Rows | Coverage |
+|---|---|---|
+| `credit_data.gold.india_corporate_lgd_panel` | 912 | Apr 2018 – Oct 2025 |
+| `credit_data.gold.india_corporate_lgd_summary` | 25 | recovery/LGD percentiles by segment |
+| `credit_data.gold.india_retail_pd_panel` | 233,154 | **disbursals Aug–Oct 2018 only** |
+| `credit_data.gold.india_retail_pd_summary` | 41 | default rates by segment |
+| `credit_data.silver.ibbi_cirp_cases` | 1,162 | CIRP cases |
+| `credit_data.silver.ibbi_liquidation_cases` | 560 | liquidations |
+| `credit_data.silver.ibbi_liquidation_waterfall` | 187 | distribution waterfall |
+| `credit_data.silver.ibbi_voluntary_liquidations` | 299 | voluntary liquidations |
 
-But you were right that it may be mostly cataloguing: the same read-only sweep above looks
-for FDIC- and Call-Report-shaped objects in the sibling schemas. If they are there, exposing
-them is far less work than fetching them.
+**Three things to check with the owner before planning on it.**
+
+The retail PD panel is 233,154 loans but the disbursal dates span **three months** — August
+to October 2018. That is a large cross-section, not a panel through time, and it cannot carry
+a through-the-cycle PD.
+
+The IBBI date columns are **text in mixed formats**. `ibbi_cirp_cases.cirp_commencement_date`
+reports a range of "01-01-2018 to 31-12-21" and `ibbi_liquidation_cases` "01-01-2024 to
+31-10-23" — those are lexical string extremes over `DD-MM-YYYY` and `DD-MM-YY` mixed
+together, so neither is a real date range. Parse before trusting any period filter.
+
+The IBBI tables carry `extraction_method`, `source_page`, `n_numeric_tokens` and
+`structural_ok` — they are **extracted from published IBBI documents**, not drawn from an
+API, and they ship their own QA flags. Use `structural_ok`.
+
+`credit_data.catalog.source_registry` holds only 3 rows against far more tables, so it is not
+a complete inventory of that database.
+
+### G-10 · Bank regulatory data — **you were right; most of it already exists**
+Our earlier answer called this a new ingest on the scale of the SEC bulk load. That was
+wrong. `credit_data.silver.fdic_bank_financials` holds **1,093,173 rows covering 1992-12-31
+to 2026-03-31**, at institution-quarter grain, 63 columns including `CERT, REPDTE, NAME,
+CITY, STALP, BKCLASS, ASSET, DEP`. Two aggregates sit on top:
+`gold.us_bank_credit_quarterly` (134 quarters, with `nco_rate_weighted_pct`,
+`noncurrent_rate_median_pct`, `allowance_to_loans_median_pct`) and `gold.us_bank_credit_by_size`
+(655 rows by size class).
+
+So your hypothesis holds: cataloguing and exposing is most of the work, not fetching.
+
+**The join you named is still the missing piece.** `fdic_bank_financials` is keyed on `CERT`
+and carries `NAME`, but no CIK. A CIK↔CERT crosswalk does not exist in either database, and
+matching on name would run straight into the 2,219 name collisions documented under G-19.
+That crosswalk is the real task for the banks segment, and it is a much smaller one than an
+FFIEC ingest.
 
 ### G-11 · Insurance statutory data — **no free path**
 NAIC statutory filings are not bulk-downloadable the way FFIEC Call Reports are. Unlike G-10
