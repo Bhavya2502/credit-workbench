@@ -10,6 +10,13 @@ data in `gold`, `silver` or `catalog`. What it cannot supply is *meaning* - whet
 called `pd` is a probability of default or a product code is the owner's to confirm, and the
 catalogue says so rather than guessing.
 
+**These schemas are not in `credit_workbench`.** MotherDuck's `information_schema` spans
+every database the token can reach, so the first version listed them as though they were
+local and then failed to count a single row: an unqualified `silver.fdic_bank_financials`
+resolves inside `credit_workbench` only, where it does not exist. Every name here is
+resolved to its database first and quoted, which is also the honest way to report the
+finding - this is another database in the same account, not a corner of ours.
+
 It also serves G-10 in passing. The gap document notes that FDIC data may already sit in
 these schemas, in which case exposing it is most of the work of the banks segment rather than
 a new ingest of FFIEC Call Reports. That is worth knowing before anyone commissions the
@@ -27,16 +34,17 @@ SIBLING = ("gold", "silver", "catalog", "bronze", "raw_india", "india")
 def main() -> None:
     con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
 
-    print("### 1. Which schemas exist in this database at all?")
+    print("### 1. Which databases and schemas can this token reach?")
     try:
         cur = con.execute("""
-            SELECT table_schema, count(*) AS objects,
+            SELECT table_catalog, table_schema, count(*) AS objects,
                    count(*) FILTER (WHERE table_type = 'BASE TABLE') AS tables,
                    count(*) FILTER (WHERE table_type = 'VIEW') AS views
             FROM information_schema.tables
-            GROUP BY table_schema ORDER BY objects DESC""")
+            GROUP BY 1, 2 ORDER BY objects DESC""")
         for r in cur.fetchall():
-            print(f"  {r[0]:<20} {r[1]:>5} objects  ({r[2]} tables, {r[3]} views)")
+            print(f"  {r[0]:<22}.{r[1]:<20} {r[2]:>5} objects  "
+                  f"({r[3]} tables, {r[4]} views)")
     except Exception as exc:
         print(f"  (failed: {str(exc)[:190]})")
 
@@ -45,18 +53,18 @@ def main() -> None:
     print("\n### 2. Objects in the sibling schemas, with column counts")
     try:
         cur = con.execute(f"""
-            SELECT t.table_schema, t.table_name, t.table_type,
+            SELECT t.table_catalog, t.table_schema, t.table_name, t.table_type,
                    count(c.column_name) AS columns
             FROM information_schema.tables t
             LEFT JOIN information_schema.columns c
               ON c.table_schema = t.table_schema AND c.table_name = t.table_name
             WHERE t.table_schema IN ({quoted})
-            GROUP BY 1, 2, 3 ORDER BY 1, 2""")
+            GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3""")
         rows = cur.fetchall()
         if not rows:
             print("  (no objects found in any sibling schema)")
         for r in rows:
-            print(f"  {r[0]:<12} {r[1]:<44} {r[2]:<12} {r[3]:>4} cols")
+            print(f"  {r[0]}.{r[1]:<10} {r[2]:<42} {r[3]:<12} {r[4]:>4} cols")
     except Exception as exc:
         print(f"  (failed: {str(exc)[:190]})")
 
@@ -116,7 +124,15 @@ def main() -> None:
     ]
     for schema, table in relevant:
         try:
-            n = con.execute(f"SELECT count(*) FROM {schema}.{table}").fetchone()[0]
+            db = con.execute("""
+                SELECT DISTINCT table_catalog FROM information_schema.tables
+                WHERE table_schema = ? AND table_name = ?""",
+                             [schema, table]).fetchone()
+            if not db:
+                print(f"  {schema}.{table:<32} (not present in any database)")
+                continue
+            fq = f'"{db[0]}".{schema}.{table}'
+            n = con.execute(f"SELECT count(*) FROM {fq}").fetchone()[0]
             cols = [r[0] for r in con.execute("""
                 SELECT column_name FROM information_schema.columns
                 WHERE table_schema = ? AND table_name = ?
@@ -127,12 +143,12 @@ def main() -> None:
             if dated:
                 try:
                     lo, hi = con.execute(
-                        f"SELECT min({dated[0]}), max({dated[0]}) FROM {schema}.{table}"
+                        f"SELECT min({dated[0]}), max({dated[0]}) FROM {fq}"
                     ).fetchone()
                     span = f"   {dated[0]}: {str(lo)[:10]} to {str(hi)[:10]}"
                 except Exception:  # noqa: BLE001  unorderable column type
                     span = ""
-            print(f"  {schema}.{table:<32} {n:>10,} rows{span}")
+            print(f"  {db[0]}.{schema}.{table:<30} {n:>10,} rows{span}")
             print(f"      {', '.join(cols[:12])}"
                   + (f" ... (+{len(cols) - 12} more)" if len(cols) > 12 else ""))
         except Exception as exc:  # noqa: BLE001  not ours; report and continue
