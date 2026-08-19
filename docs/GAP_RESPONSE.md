@@ -224,11 +224,25 @@ What is actually there, read-only:
 | `credit_data.silver.ibbi_liquidation_waterfall` | 187 | distribution waterfall |
 | `credit_data.silver.ibbi_voluntary_liquidations` | 299 | voluntary liquidations |
 
-**Three things to check with the owner before planning on it.**
+**Four things to check with the owner before planning on it.**
 
-The retail PD panel is 233,154 loans but the disbursal dates span **three months** — August
-to October 2018. That is a large cross-section, not a panel through time, and it cannot carry
-a through-the-cycle PD.
+**`india_retail_pd_panel` appears to be a public Kaggle competition file, and its target is
+not a PD.** Its 40 columns are `loan_id, cibil_score, disbursed_amount, asset_cost, ltv,
+pri_accts, pri_active, pri_overdue, pri_balance, pri_sanctioned, sec_accts, new_accts_6m,
+delinquent_accts_6m, inquiries, avg_acct_age_months, credit_history_months, has_aadhaar,
+has_pan, default_first_emi` — the exact schema of a well-known vehicle-loan default
+competition, at its exact row count (233,154) and its exact disbursal window (Aug–Oct 2018).
+It sits in a database whose `silver` schema holds 94 download-shaped objects, most of them
+named `kaggle_*`.
+
+The decisive column is **`default_first_emi`**: that competition's target is default on the
+*first instalment*, which is a first-payment-default indicator, not a probability of default
+over any horizon. Calibrating a retail PD methodology on it would be calibrating on a
+different quantity entirely, from a competition training file.
+
+The retail PD panel is also 233,154 loans across **three months** of disbursals — a
+cross-section, not a panel through time, so it could not carry a through-the-cycle PD even if
+the target were right.
 
 The IBBI date columns are **text in mixed formats**. `ibbi_cirp_cases.cirp_commencement_date`
 reports a range of "01-01-2018 to 31-12-21" and `ibbi_liquidation_cases` "01-01-2024 to
