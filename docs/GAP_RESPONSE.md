@@ -188,10 +188,50 @@ becoming folklore.
 
 ## P2 · other segments
 
-G-10 banks, G-11 insurance, G-12 CRE, G-13 India, G-14 non-US, G-15 SME: not addressed.
-On G-13 specifically — the `gold` / `silver` / `catalog` schemas belong to another workstream
-sharing this database and we do not touch them. A catalogue of their contents has to come
-from their owner.
+Grouping these six as "not addressed" was wrong of us — they are four different situations.
+
+### G-12 · CRE property-level data — **confirmed, as you asked**
+You asked us to confirm this stays **analyst-input** for property factors. Confirmed. NOI,
+DSCR, LTV and lease maturity by property are not public in structured form, and nothing in
+this warehouse will change that.
+
+The optional partial source is real but narrower than it sounds. `marts.disclosed_kpis`
+already carries `reit_occupancy` (36 companies, 130 company-years, median 93.25%) and
+`reit_ffo` (13 companies) from REIT MD&A — portfolio-level, not property-level, and the
+19% of KPI disclosures sitting in stranded table labels hits REIT supplementals hardest,
+since that is exactly how they are formatted. Treat it as corroboration for a portfolio
+figure, never as a property-level source.
+
+Your framing is the right one: design can proceed provided the tool labels those KPIs
+honestly as analyst input.
+
+### G-13 · India data — **catalogued** (see `warehouse/diag_sibling_schemas.py`)
+We previously said this had to come from the schemas' owner. That was over-cautious —
+describing a table does not require owning it, and reading `information_schema` changes
+nothing. The catalogue is read-only: schemas, objects, column counts and every
+identifier-shaped column, so the India schemas can be assessed rather than guessed at.
+
+What a catalogue cannot give you is **meaning**. Whether a column named `pd` holds a
+probability of default or a product code is the owner's to confirm, and we have not guessed.
+
+### G-10 · Bank regulatory data — **large, and possibly smaller than it looks**
+FFIEC Call Reports or the FDIC API is a new external source with new identifiers (RSSD, FDIC
+cert) and a CIK↔RSSD crosswalk — an ingest on the scale of the original SEC bulk load, not a
+transform. Not started, and we would want it commissioned deliberately rather than started
+on the side.
+
+But you were right that it may be mostly cataloguing: the same read-only sweep above looks
+for FDIC- and Call-Report-shaped objects in the sibling schemas. If they are there, exposing
+them is far less work than fetching them.
+
+### G-11 · Insurance statutory data — **no free path**
+NAIC statutory filings are not bulk-downloadable the way FFIEC Call Reports are. Unlike G-10
+there is no obvious free source to point at, which is why it sits below banks in your own
+ranking and in ours.
+
+### G-14 non-US filers · G-15 private and SME — **nothing requested**
+Both are marked "noting rather than requesting" in your document, and we have read them that
+way. Recorded as constraints on segment coverage, not as work.
 
 ---
 
