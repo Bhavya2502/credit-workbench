@@ -1,0 +1,22 @@
+name: export-workbook
+# The company / industry / line-item map of the warehouse as one Excel workbook,
+# published as a run artifact. Nothing is written to anyone's laptop by the pipeline.
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.warehouse.export_workbook
+      - uses: actions/upload-artifact@v4
+        with:
+          name: credit-workbench-map
+          path: export/
+          retention-days: 14
