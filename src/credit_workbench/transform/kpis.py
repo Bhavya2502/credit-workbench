@@ -53,8 +53,15 @@ DICTIONARY = [
      "count", 0.0, 1e7, 56.5),
     ("airline_load_factor", "Passenger load factor", "load factor", "45",
      "percent", 0.0, 100.0, 46.7),
-    ("airline_rasm", "Revenue per available seat mile", "available seat mile", "45",
-     "count", 0.0, 100.0, 43.3),
+    # Split, because "available seat mile" matched revenue per ASM and cost per ASM
+    # equally and put both in one column: American Airlines showed 16.05 from "total
+    # revenue per available seat mile (TRASM)" beside 14.85 from "total cost per available
+    # seat mile (CASM)". A revenue measure and a cost measure, indistinguishable once
+    # stored, and every value plausible. The phrases now name which one they mean.
+    ("airline_rasm", "Revenue per available seat mile",
+     "revenue per available seat mile", "45", "count", 0.0, 100.0, 43.3),
+    ("airline_casm", "Cost per available seat mile",
+     "cost per available seat mile", "45", "count", 0.0, 100.0, 43.3),
     ("mfg_backlog", "Order backlog", "backlog", "35,36,37",
      "dollar", 0.0, 1e9, 38.0),
     ("restaurant_auv", "Average unit volume", "average unit volume", "58",
@@ -187,6 +194,17 @@ def extract_for(kpi: str, phrase: str, sics: str, unit: str,
     scale_guard = (
         f"AND NOT regexp_matches(regexp_extract(lower(line), '{trailing_re}'), "
         f"'million|billion|thousand')" if per_unit and trailing_re else "")
+
+    # A year read as a value. Allegiant's 2023 filing yielded a RASM of 2023.00 from
+    # "While demand has normalized since the post-pandemic period" - the range check caught
+    # that one, because 2023 cannot be a RASM. It would not catch a year standing in for a
+    # backlog or a store count, whose plausible ranges include it. So a four-digit number
+    # introduced by a date word is refused outright rather than left to a bound that only
+    # some KPIs have.
+    year_guard = (
+        rf"AND NOT regexp_matches(lower(line), "
+        rf"'{pat}[^0-9]{{0,25}}(in|fiscal|year|ended|during|through|since|for)\s+"
+        rf"(19|20)[0-9][0-9]([^0-9]|$)')")
     return f"""
 SELECT cik, fy, '{kpi}' AS kpi, section, adsh,
        TRY_CAST(replace(regexp_extract(lower(line), '{value_re}', 1), ',', '')
@@ -199,6 +217,7 @@ FROM staging.kpi_lines
 WHERE sic2 IN ({sic_list})
   AND regexp_matches(lower(line), '{value_re}')
   {scale_guard}
+  {year_guard}
 """
 
 
