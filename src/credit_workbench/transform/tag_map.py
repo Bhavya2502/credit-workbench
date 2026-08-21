@@ -27,6 +27,35 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
     # of contract revenue, the difference being alliance and royalty income. Filers
     # whose revenue is entirely from contracts tag only the latter, so it still wins
     # by fallback.
+    #
+    # Everything after the IFRS pair below was added on 21 Aug 2026, measured against
+    # SEC's own companyfacts rather than against our derived layer. Xcel Energy's
+    # FY2023 revenue of $14.206bn was in our fact base under
+    # `RegulatedAndUnregulatedOperatingRevenue` and no line claimed it; the same was
+    # true of Novartis at $45.4bn under IFRS. The map held nine tags, all of them
+    # commercial-company tags, which is why 24.6% of company-years carried no revenue.
+    #
+    # ONE RULE decides what is admitted: a tag must be a TOTAL revenue measure. A
+    # component understates the line while looking entirely plausible, which is the
+    # worst failure this map can have. So these are deliberately refused, with the
+    # count of company-years they would have "fixed" in a 200-row sample:
+    #     RevenueFromRelatedParties (7)          revenue from related parties only
+    #     RegulatedOperatingRevenueGas (2)       the gas half of a utility
+    #     UnregulatedOperatingRevenue (2)        the unregulated half
+    #     InterestAndFeeIncomeLoansAndLeases     one component of interest income
+    #     RevenuesIncludingIntersegmentRevenues  includes what consolidation removes
+    #     RevenueFromSaleOfCrudeOil / ...NaturalGas   one product each
+    #     OtherHotelOperatingRevenue             the "other" bucket
+    # A null is recoverable later; a wrong number is not detectable at all.
+    #
+    # BANKS: `InterestAndDividendIncomeOperating` is total interest and dividend
+    # income - a lender's top line. It sits LAST so `Revenues` and
+    # `RevenuesNetOfInterestExpense` win wherever a filer tags them. Note what this
+    # means: for a bank falling through to it, revenue is GROSS interest income and
+    # excludes non-interest income. That is a convention, not a fact, and it is
+    # auditable - `marts.spread_lines.source_tag` records which tag supplied every
+    # figure, so `WHERE source_tag = 'InterestAndDividendIncomeOperating'` isolates
+    # every company-year on this basis.
     (10, "revenue", "Revenue", "IS", [
         "Revenues",
         "RevenueFromContractWithCustomerExcludingAssessedTax",
@@ -34,7 +63,23 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
         "SalesRevenueNet", "SalesRevenueGoodsNet",
         "SalesRevenueServicesNet", "RevenuesNetOfInterestExpense",
         # IFRS taxonomy, used by foreign private issuers filing 20-F
-        "Revenue", "RevenueFromContractsWithCustomers"]),
+        "Revenue", "RevenueFromContractsWithCustomers",
+        # regulated utilities - the combined total first, then pure-play totals
+        "RegulatedAndUnregulatedOperatingRevenue",
+        "RegulatedOperatingRevenue", "ElectricUtilityRevenue",
+        # oil and gas
+        "OilAndGasRevenue", "OilAndGasSalesRevenue",
+        "RevenueFromSaleOfOilAndGasProducts",
+        # health care and construction
+        "HealthCareOrganizationRevenue",
+        "HealthCareOrganizationRevenueNetOfPatientServiceRevenueProvisions",
+        "ContractsRevenue", "RevenueFromLeasedAndOwnedHotels",
+        # IFRS industry totals, used by 20-F filers
+        "RevenueFromSaleOfGoods", "RevenueFromRenderingOfServices",
+        "RevenueFromRenderingOfTelecommunicationServices",
+        "RevenueFromRenderingOfTransportServices", "RevenueFromSaleOfGold",
+        # banks last: gross interest and dividend income. See the note above.
+        "InterestAndDividendIncomeOperating"]),
     (20, "cost_of_sales", "Cost of sales", "IS", [
         "CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold",
         "CostOfServices", "CostOfSales"]),
@@ -244,10 +289,22 @@ TEMPLATE: list[tuple[int, str, str, str, list[str]]] = [
         "IncreaseDecreaseInOtherOperatingCapitalNet",
         "IncreaseDecreaseInPrepaidDeferredExpenseAndOtherAssets",
         "IncreaseDecreaseInOtherOperatingAssets"]),
+    # The IFRS tag below is the same gap as on revenue: a 20-F filer's capex was
+    # sitting in the fact base unclaimed. The PP&E variants are US filers who tag a
+    # narrower asset class than the headline tag. `PaymentsToAcquireRealEstate` is
+    # admitted because for a property company it IS the capital expenditure; the
+    # securities and loan `PaymentsToAcquire*` tags are refused - buying a bond is
+    # not capex, and a broad pattern match over that prefix is what made an earlier
+    # estimate of this gap 1,192 companies when the true figure was nearer 500.
     (980, "capex", "Capital expenditure", "CF", [
         "PaymentsToAcquirePropertyPlantAndEquipment",
         "PaymentsForCapitalImprovements",
-        "PaymentsToAcquireProductiveAssets"]),
+        "PaymentsToAcquireProductiveAssets",
+        "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+        "PaymentsToAcquireOtherPropertyPlantAndEquipment",
+        "PaymentsToAcquireMachineryAndEquipment",
+        "PaymentsToAcquireOtherProductiveAssets",
+        "PaymentsToAcquireRealEstate"]),
     (990, "acquisitions", "Acquisitions, net of cash", "CF", [
         "PaymentsToAcquireBusinessesNetOfCashAcquired",
         "PaymentsToAcquireBusinessesAndInterestInAffiliates"]),
@@ -318,6 +375,41 @@ DERIVED = [
     (1270, "tangible_net_worth", "Tangible net worth"),
     (1280, "capital_employed", "Capital employed"),
 ]
+
+
+def _assert_one_line_per_tag() -> None:
+    """A tag may feed two lines only if they sit on different statements.
+
+    The spread resolves each line independently, so a tag claimed by two lines of the
+    SAME statement is counted twice and every subtotal built on them is wrong, while
+    each individual figure still looks correct - the failure mode nothing downstream
+    can detect.
+
+    Across statements it is legitimate and load-bearing.
+    `DepreciationDepletionAndAmortization` feeds both `dep_amort_is` and
+    `dep_amort_cf` because D&A is presented on both statements, and `build_lines`
+    separates them by preferring facts whose own `stmt` matches the line's statement:
+
+        ORDER BY CASE WHEN stmt = statement THEN 0 ELSE 1 END, priority, filed DESC
+
+    So the key is (tag, statement), not tag. Checked at import, so a bad edit cannot
+    reach a build.
+    """
+    owner: dict[tuple[str, str], str] = {}
+    for _, code, _, stmt, tags in TEMPLATE:
+        if len(tags) != len(set(tags)):
+            dupe = [t for t in tags if tags.count(t) > 1]
+            raise ValueError(f"{code} lists a tag twice: {sorted(set(dupe))}")
+        for tag in tags:
+            key = (tag, stmt)
+            if key in owner and owner[key] != code:
+                raise ValueError(
+                    f"tag {tag!r} is claimed by both {owner[key]!r} and {code!r} on "
+                    f"statement {stmt}; both lines would take the same figure")
+            owner[key] = code
+
+
+_assert_one_line_per_tag()
 
 
 def rows() -> list[tuple]:
