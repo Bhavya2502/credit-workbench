@@ -114,6 +114,21 @@ CAVEATS = [
     ("Fiscal years",
      "fy is the filer's own label. FY2026-FY2028 hold 21 company-years between them "
      "and are the filers' forward labelling, not our error."),
+    ("Industry, per year",
+     "The industry on the statement sheets is the tag from the company's most recent "
+     "year, and industry_changed flags the 9.8% whose SIC moved. The Company_years "
+     "sheet carries the tag as it stood in each individual year, with "
+     "sic_changed_this_year marking the year it moved."),
+    ("Default and distress flags",
+     "On Company_years, measured forward from observation_date (the filing date): "
+     "distress and default at 12 and 24 months, plus bankruptcy, debt acceleration, "
+     "non-reliance, late filing and delisting at 24 months. The last two years of the "
+     "window are censored - a FALSE there means 'not yet', not 'no'."),
+    ("Missing companies",
+     "2,018 companies hold XBRL facts but no spread. 1,504 never tagged an annual "
+     "income-statement or cash-flow flow, so there is nothing to spread. The other "
+     "511 are mostly foreign private issuers filing 20-F under IFRS, whose tags the "
+     "us-gaap template does not claim - a known gap, not a filter."),
 ]
 
 FMT: dict[str, object] = {}
@@ -147,7 +162,7 @@ def stream_sheet(wb, con, name, query, widths=None, money_from=None):
     cur = con.execute(query)
     heads = [d[0] for d in cur.description]
     ws = wb.add_worksheet(name)
-    ws.freeze_panes(1, 5)                        # keys stay put, years scroll
+    ws.freeze_panes(1, 6)                        # keys stay put, years scroll
     for i, h in enumerate(heads):
         w = (widths or {}).get(h, min(max(len(str(h)) + 2, 10), 44))
         fmt = FMT["money"] if (money_from is not None and i >= money_from) else None
@@ -160,8 +175,8 @@ def stream_sheet(wb, con, name, query, widths=None, money_from=None):
             break
         for row in batch:
             n += 1
-            per_share = (money_from is not None and len(row) > 5
-                         and row[5] in PER_SHARE)
+            per_share = (money_from is not None and len(row) > 6
+                         and row[6] in PER_SHARE)
             if per_share:                        # override the integer money format
                 ws.write_row(n, 0, row[:money_from])
                 for j, v in enumerate(row[money_from:]):
@@ -205,6 +220,9 @@ def sheet_readme(wb, counts, years):
                             "derives (EBITDA, total debt, net debt, FCF and so on).",
         "Companies": "The index: every company with tickers, SIC, industry names, "
                      "peer group and the span of years held.",
+        "Company_years": "One row per company-year: the industry as tagged in THAT "
+                         "year, and every distress and default flag the warehouse "
+                         "holds at 12 and 24 months.",
         "Line_items": "The template in statement order, with the XBRL tag alternatives "
                       "behind each line and how often it is populated.",
     }
@@ -239,16 +257,24 @@ def main() -> None:
           f"{len(set(i[1] for i in items))} statements")
 
     # A year column holds one figure, so a fiscal year must resolve to one period end.
+    # spreads.py already decides which row that is: is_primary_annual ranks on how many
+    # of revenue/total_assets/cfo are present FIRST and only then on period end. An
+    # earlier version of this export ranked on period end alone and picked the emptier
+    # row 583 times, blanking revenue in 397 of them.
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE annual AS
         SELECT * FROM marts.spreads_a
-        WHERE basis = '{BASIS}'
-        QUALIFY row_number() OVER (PARTITION BY cik, fy ORDER BY period_end DESC) = 1""")
+        WHERE basis = '{BASIS}' AND is_primary_annual""")
     kept, total = con.execute(f"""
         SELECT (SELECT count(*) FROM annual),
                (SELECT count(*) FROM marts.spreads_a WHERE basis = '{BASIS}')""").fetchone()
-    print(f"  kept {kept:,} of {total:,} rows - {total - kept:,} extra period ends "
+    print(f"  kept {kept:,} of {total:,} rows - {total - kept:,} secondary period ends "
           f"inside a fiscal-year label dropped")
+    dupes = con.execute(
+        "SELECT count(*) - count(DISTINCT (cik, fy)) FROM annual").fetchone()[0]
+    if dupes:
+        raise SystemExit(f"{dupes:,} fiscal years still carry two rows; a year column "
+                         "cannot hold two figures.")
 
     years = [r[0] for r in con.execute(
         "SELECT DISTINCT fy FROM annual WHERE fy IS NOT NULL ORDER BY fy").fetchall()]
@@ -275,16 +301,74 @@ def main() -> None:
                 "statement VARCHAR, line_no INTEGER, line_item VARCHAR)")
     con.executemany("INSERT INTO template VALUES (?, ?, ?, ?)", items)
 
+    # `any_value` would pick arbitrarily for the 9.8% of companies that changed SIC.
+    # The identity columns take the tag from the company's most recent year, and
+    # industry_changed says whether that tag ever moved - the per-year truth is on the
+    # Company_years sheet.
     con.execute("""
         CREATE OR REPLACE TEMP TABLE co AS
-        SELECT a.cik, any_value(a.company_name) AS company_name, any_value(a.sic) AS sic,
-               any_value(h.sic4_description) AS industry,
-               any_value(g.industry_label) AS peer_group,
+        SELECT a.cik,
+               arg_max(a.company_name, a.fy) AS company_name,
+               arg_max(a.sic, a.fy) AS sic,
+               arg_max(h.sic4_description, a.fy) AS industry,
+               arg_max(g.industry_label, a.fy) AS peer_group,
+               count(DISTINCT a.sic) AS sic_codes_used,
+               count(DISTINCT a.sic) > 1 AS industry_changed,
                min(a.fy) AS first_fy, max(a.fy) AS last_fy, count(*) AS years_held
         FROM annual a
         LEFT JOIN ref.sic_hierarchy h ON h.sic4 = a.sic
         LEFT JOIN ref.industry_group g ON g.sic4 = a.sic
         GROUP BY a.cik""")
+
+    # One row per company-year: the industry as tagged in THAT year, and every outcome
+    # flag the warehouse carries. credit_outcomes is grained finer than (cik, fy), so it
+    # is collapsed to (cik, fy, period_end) before joining or the join fans out.
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE outcomes_one AS
+        SELECT TRY_CAST(cik AS BIGINT) AS cik, fy, period_end,
+               max(observation_date) AS observation_date,
+               max(events_24m) AS events_24m,
+               min(days_to_first_event) AS days_to_first_event,
+               arg_min(first_event_category, days_to_first_event) AS first_event_category,
+               arg_min(first_event, days_to_first_event) AS first_event,
+               max(worst_severity_24m) AS worst_severity_24m,
+               bool_or(distress_12m) AS distress_12m,
+               bool_or(distress_24m) AS distress_24m,
+               bool_or(default_12m) AS default_12m,
+               bool_or(default_24m) AS default_24m,
+               bool_or(bankruptcy_24m) AS bankruptcy_24m,
+               bool_or(debt_acceleration_24m) AS debt_acceleration_24m,
+               bool_or(non_reliance_24m) AS non_reliance_24m,
+               bool_or(late_filing_24m) AS late_filing_24m,
+               bool_or(delisting_24m) AS delisting_24m,
+               bool_or(adverse_delisting_24m) AS adverse_delisting_24m
+        FROM marts.credit_outcomes GROUP BY 1, 2, 3""")
+
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE company_years AS
+        SELECT a.cik, a.company_name, a.fy, a.period_end, a.last_filed AS filed,
+               a.sic, h.sic4_description AS industry, h.sic3, h.sic2,
+               h.division_name AS division,
+               g.industry_code AS peer_group_code, g.industry_label AS peer_group,
+               a.sic <> lag(a.sic) OVER (PARTITION BY a.cik ORDER BY a.fy)
+                   AS sic_changed_this_year,
+               a.is_empty_spread,
+               o.observation_date, o.events_24m, o.days_to_first_event,
+               o.first_event_category, o.first_event, o.worst_severity_24m,
+               o.distress_12m, o.distress_24m, o.default_12m, o.default_24m,
+               o.bankruptcy_24m, o.debt_acceleration_24m, o.non_reliance_24m,
+               o.late_filing_24m, o.delisting_24m, o.adverse_delisting_24m
+        FROM annual a
+        LEFT JOIN ref.sic_hierarchy h ON h.sic4 = a.sic
+        LEFT JOIN ref.industry_group g ON g.sic4 = a.sic
+        LEFT JOIN outcomes_one o
+               ON o.cik = a.cik AND o.fy = a.fy AND o.period_end = a.period_end""")
+    cy, src = con.execute("""
+        SELECT (SELECT count(*) FROM company_years), (SELECT count(*) FROM annual)
+        """).fetchone()
+    print(f"  company_years {cy:,} rows against {src:,} annual rows")
+    if cy != src:
+        raise SystemExit(f"the outcome join fanned out ({cy:,} vs {src:,}).")
 
     wb = xlsxwriter.Workbook(OUT / "credit_workbench_statements.xlsx",
                              {"constant_memory": True})
@@ -303,7 +387,7 @@ def main() -> None:
 
     for sheet, stmt in SHEETS:
         counts[sheet] = stream_sheet(wb, con, sheet, f"""
-            SELECT c.cik, c.company_name, c.sic, c.industry,
+            SELECT c.cik, c.company_name, c.sic, c.industry, c.industry_changed,
                    t.line_no, t.line_code, t.line_item,
                    coalesce(p.years_populated, 0) AS years_populated,
                    {year_sel}
@@ -311,17 +395,39 @@ def main() -> None:
             CROSS JOIN (SELECT * FROM template WHERE statement = '{stmt}') t
             LEFT JOIN pivoted p ON p.cik = c.cik AND p.line_code = t.line_code
             ORDER BY c.company_name, t.line_no""",
-            widths, money_from=8)
+            widths, money_from=9)
 
     counts["Companies"] = stream_sheet(wb, con, "Companies", """
         SELECT c.cik, c.company_name, t.tickers, c.sic, c.industry, c.peer_group,
+               c.sic_codes_used, c.industry_changed,
                d.entity_type, d.filer_category,
-               c.first_fy, c.last_fy, c.years_held
+               c.first_fy, c.last_fy, c.years_held,
+               coalesce(o.years_with_outcome, 0) AS years_with_outcome,
+               coalesce(o.distress_12m, 0) AS distress_12m_years,
+               coalesce(o.distress_24m, 0) AS distress_24m_years,
+               coalesce(o.default_12m, 0) AS default_12m_years,
+               coalesce(o.default_24m, 0) AS default_24m_years,
+               coalesce(o.bankruptcy_24m, 0) AS bankruptcy_24m_years,
+               coalesce(o.default_24m, 0) > 0 AS ever_default_24m
         FROM co c
         LEFT JOIN ref.dim_company d ON d.cik = c.cik
         LEFT JOIN (SELECT cik, string_agg(DISTINCT ticker, ' ') AS tickers
                    FROM ref.company_tickers GROUP BY cik) t ON t.cik = c.cik
+        LEFT JOIN (SELECT cik,
+                          count(*) FILTER (WHERE observation_date IS NOT NULL)
+                              AS years_with_outcome,
+                          count(*) FILTER (WHERE distress_12m) AS distress_12m,
+                          count(*) FILTER (WHERE distress_24m) AS distress_24m,
+                          count(*) FILTER (WHERE default_12m) AS default_12m,
+                          count(*) FILTER (WHERE default_24m) AS default_24m,
+                          count(*) FILTER (WHERE bankruptcy_24m) AS bankruptcy_24m
+                   FROM company_years GROUP BY cik) o ON o.cik = c.cik
         ORDER BY c.company_name""", widths)
+
+    counts["Company_years"] = stream_sheet(wb, con, "Company_years", """
+        SELECT * FROM company_years ORDER BY company_name, fy""",
+        {"company_name": 44, "industry": 38, "peer_group": 34,
+         "first_event": 60, "first_event_category": 22})
 
     counts["Line_items"] = stream_sheet(wb, con, "Line_items", f"""
         WITH tags AS (
