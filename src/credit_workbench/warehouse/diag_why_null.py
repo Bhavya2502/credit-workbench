@@ -24,8 +24,13 @@ POP = "basis = 'first_reported' AND is_primary_annual"
 
 # Concepts a filer would use for these ideas. Deliberately broad: the point is to find
 # out whether a revenue-shaped tag exists at all, not to map it correctly.
-REVENUE_LIKE = "(tag ILIKE '%revenue%' OR tag ILIKE '%sales%' OR tag ILIKE '%premium%' OR tag ILIKE '%interestanddividendincome%')"
-CAPEX_LIKE = "(tag ILIKE '%paymentstoacquire%' OR tag ILIKE '%capitalexpenditure%' OR tag ILIKE '%purchaseofproperty%' OR tag ILIKE '%paymentsforcapital%')"
+# Qualified as f.tag: both facts_pit and tag_map carry a `tag` column, and an
+# unqualified reference is an ambiguity error, not a silent wrong answer - it failed
+# loudly on the first run.
+REVENUE_LIKE = ("(f.tag ILIKE '%revenue%' OR f.tag ILIKE '%sales%' "
+                "OR f.tag ILIKE '%premium%' OR f.tag ILIKE '%interestand%income%')")
+CAPEX_LIKE = ("(f.tag ILIKE '%paymentstoacquire%' OR f.tag ILIKE '%capitalexpenditure%' "
+              "OR f.tag ILIKE '%purchaseofproperty%' OR f.tag ILIKE '%paymentsforcapital%')")
 
 Q = [
     ("1. The nulls, and how many are simply empty spreads", f"""
