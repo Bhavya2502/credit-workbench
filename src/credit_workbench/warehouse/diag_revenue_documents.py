@@ -37,7 +37,7 @@ import httpx
 from credit_workbench.common.config import motherduck_token, sec_user_agent
 from credit_workbench.common.html_text import to_rows
 
-SEED, N, DOCS = 42, 200, 25
+SEED, N, DOCS = 42, 200, 40
 DAY_TOLERANCE, MIN_DAYS, MAX_DAYS = 7, 300, 400
 
 STARTS = ("revenue", "revenues", "salesrevenue", "totalrevenue", "oilandgasrevenue",
@@ -217,8 +217,11 @@ def main() -> None:
         hits = REV_LINE.findall(text)
         if hits:
             found += 1
-            sample_hits = "; ".join(f"{a.strip()} {b}" for a, b in hits[:3])
-            print(f"  {label}  REVENUE IN DOCUMENT -> {sample_hits[:96]}")
+            # print the row itself, not just the capture, so the number can be judged
+            row = next((ln.strip() for ln in text.splitlines()
+                        if REV_LINE.match(ln)), "")
+            print(f"  {label}  REVENUE IN DOCUMENT")
+            print(f"        | {row[:104]}")
         else:
             notfound += 1
             print(f"  {label}  no revenue line in the document either "
