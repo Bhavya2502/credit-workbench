@@ -66,14 +66,18 @@ WHERE s.basis = 'first_reported' AND s.is_primary_annual
   AND substr(s.sic, 1, 2) NOT IN ('60','61','62','63','64','65','67')
 """
 
-# A revenue label on the face of an income statement, followed by a number on the same
-# row. to_rows() is what keeps them on the same row.
+# A revenue label followed by a MONEY figure on the same row. The first version accepted
+# any four-digit run, so it matched the column headers ("Revenue 2024 2023") and the
+# Revenue Act of 1986, and reported 58% of shell companies as having revenue. Thousands
+# grouping is now required - 2,928,188 matches, 2024 does not - and the label must start
+# the row, which is how an income-statement line is laid out.
+MONEY = r"\(?\$?\s?(\d{1,3}(?:,\d{3})+(?:\.\d+)?)\)?"
 REV_LINE = re.compile(
-    r"(?im)^[^\n]{0,80}?\b("
+    r"(?im)^\s{0,6}("
     r"total\s+revenues?|total\s+net\s+revenues?|net\s+revenues?|revenues?"
     r"|net\s+sales|total\s+sales|sales,?\s+net|total\s+operating\s+revenues?"
-    r"|oil\s+and\s+gas\s+revenues?|operating\s+revenues?"
-    r")\b[^\n]{0,60}?[\s\$\(]([\d][\d,]{3,})")
+    r"|oil\s+and\s+gas\s+revenues?|operating\s+revenues?|sales"
+    r")\b[^\n]{0,70}?" + MONEY)
 
 
 def parse(s: str) -> datetime.date:
