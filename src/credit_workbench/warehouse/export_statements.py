@@ -72,6 +72,10 @@ DERIVED = {
     "ffo_simplified": "Funds from operations, simplified (derived)",
 }
 
+# Per-share lines need decimals. Under the money format an EPS of 6.08 renders as "6",
+# which is wrong on the face of a statement even though the stored value is intact.
+PER_SHARE = ("eps_basic", "eps_diluted", "dividends_declared_ps")
+
 SHEETS = [
     ("Income_statement", "IS"),
     ("Balance_sheet", "BS"),
@@ -156,7 +160,14 @@ def stream_sheet(wb, con, name, query, widths=None, money_from=None):
             break
         for row in batch:
             n += 1
-            ws.write_row(n, 0, row)
+            per_share = (money_from is not None and len(row) > 5
+                         and row[5] in PER_SHARE)
+            if per_share:                        # override the integer money format
+                ws.write_row(n, 0, row[:money_from])
+                for j, v in enumerate(row[money_from:]):
+                    ws.write(n, money_from + j, v, FMT["per_share"])
+            else:
+                ws.write_row(n, 0, row)
     if n:
         ws.autofilter(0, 0, n, len(heads) - 1)
     print(f"  sheet {name:<20} {n:>9,} rows x {len(heads):>3} cols")
@@ -284,6 +295,7 @@ def main() -> None:
     FMT["bold"] = wb.add_format({"bold": True})
     FMT["wrap"] = wb.add_format({"text_wrap": True, "valign": "top"})
     FMT["money"] = wb.add_format({"num_format": "#,##0"})
+    FMT["per_share"] = wb.add_format({"num_format": "#,##0.00"})
 
     counts: dict[str, int] = {}
     year_sel = ", ".join(f'p."FY{y}"' for y in years)
