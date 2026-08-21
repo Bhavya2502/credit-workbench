@@ -1,0 +1,22 @@
+name: export-statements
+# Financial statements for every company - line items down, fiscal years across -
+# published as a run artifact.
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.warehouse.export_statements
+      - uses: actions/upload-artifact@v4
+        with:
+          name: credit-workbench-statements
+          path: export/
+          retention-days: 14
