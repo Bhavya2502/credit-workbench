@@ -41,6 +41,12 @@ import xlsxwriter
 from credit_workbench.common.config import motherduck_token
 
 OUT = Path("export")
+
+# US postal state, DC and territory codes - the exact test for "is this a US state".
+US_CODES = """('AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN',
+   'IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+   'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA',
+   'WA','WV','WI','WY','DC','PR','VI','GU','AS','MP')"""
 BASIS = "first_reported"
 BATCH = 5_000
 
@@ -73,11 +79,24 @@ CAVEATS = [
      "USD. Annual revenue is 100% USD across all first-reported lines - the IFRS "
      "filers who report in other currencies are absent from the spread entirely. "
      "Figures are as filed and unscaled."),
+    ("What country means here",
+     "The country of the company's BUSINESS ADDRESS on its EDGAR record - where it is "
+     "based, not where it is incorporated and not where it lists. 330 companies have a "
+     "US address and Cayman incorporation; 214 have a China address and US "
+     "incorporation. For legal or recovery analysis use incorporation instead; it is "
+     "on ref.dim_company.state_of_incorporation."),
     ("Country derivation",
      "business_state holds EDGAR's stateOrCountry code and business_country its "
-     "description. Identical means a US state, so CA beside CA is California, not "
-     "Canada. Canadian provinces ('Ontario, Canada') roll into Canada. Country names, "
-     "not ISO-2 codes - the warehouse holds no ISO crosswalk."),
+     "description. The code is matched against the US postal state, DC and territory "
+     "codes - exact, not inferred. Canadian provinces ('Ontario, Canada') roll into "
+     "Canada; 'Virgin Islands, British' is reordered rather than cut to 'British'. "
+     "Codes carrying no description (L4, L5, XX - 5 companies) are Unknown, not US. "
+     "Country names, not ISO-2 codes: the warehouse holds no ISO crosswalk."),
+    ("Not all SEC filers are US companies",
+     "12,813 companies have a US business address, 2,052 are based abroad and 685 have "
+     "no address on file. All 2,052 file 10-K - no 20-F or 40-F filer appears here at "
+     "all, because those file under IFRS and fall out of the spread. So foreign "
+     "coverage is US-GAAP filers based abroad, not the full foreign-listed universe."),
     ("Basis",
      f"{BASIS} - figures as first published, not restated, one row per fiscal year "
      "chosen by the spread builder's is_primary_annual flag."),
@@ -120,16 +139,32 @@ def stream_sheet(wb, con, name, query, widths=None, money_cols=()):
 
 def build_base(con) -> int:
     """One row per company-year, carrying every industry key and a resolved country."""
-    con.execute("""
+    # EDGAR's stateOrCountry code space: US states are their postal codes, foreign
+    # places have their own alphanumeric codes (F4 China, A1 British Columbia, E9 Cayman).
+    # business_state holds the code and business_country its description.
+    #
+    # An earlier version tested `code == description` as the sign of a US state. Checked
+    # against the real postal codes that was right 12,792 times out of 12,800 and wrong 8:
+    # L4, L5 and XX are foreign or unknown codes carrying no description, and three
+    # lowercase states ('ny') would have failed a naive uppercase test. Matching the code
+    # against the list directly, case-insensitively, is exact and is what runs now.
+    con.execute(f"""
         CREATE OR REPLACE TEMP TABLE country AS
         SELECT cik,
                CASE
                  WHEN business_country IS NULL OR business_country = '' THEN 'Unknown'
-                 -- code == description means the code is a US state, not a country
-                 WHEN business_country = business_state THEN 'United States'
+                 WHEN upper(business_state) IN {US_CODES} THEN 'United States'
                  WHEN business_country = 'United States' THEN 'United States'
-                 -- "Ontario, Canada" -> Canada; the province is not the country
-                 ELSE trim(regexp_extract(business_country, '([^,]+)$', 1))
+                 -- a code repeated as its own description is a code we cannot name
+                 WHEN business_country = business_state THEN 'Unknown'
+                 -- "Ontario, Canada" -> Canada; a province is not a country
+                 WHEN business_country LIKE '%, Canada' THEN 'Canada'
+                 -- "Virgin Islands, British" -> "British Virgin Islands". Taking the last
+                 -- comma segment gave "British", which is not a place. 46 company-years
+                 -- carried it in the first build.
+                 WHEN position(', ' IN business_country) > 0
+                   THEN regexp_replace(business_country, '^(.*), (.*)$', '\2 \1')
+                 ELSE business_country
                END AS country
         FROM ref.dim_company""")
 
