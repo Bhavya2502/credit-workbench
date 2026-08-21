@@ -42,12 +42,30 @@ N = 200
 DAY_TOLERANCE = 7          # 52/53-week fiscal calendars drift against the month end
 MIN_DAYS, MAX_DAYS = 300, 400
 
+# The loose run counted AvailableForSaleSecuritiesGrossUnrealizedGains as a revenue
+# concept, because "AvailableForSale" contains "sales". So a company-year could be called
+# recoverable on the strength of a securities disclosure. The rule is now a whitelist of
+# concept shapes that actually ARE an income-statement revenue, and the ASC 932
+# supplementary oil-and-gas measures are excluded: they are a standardised-measure
+# disclosure, not the revenue line, and mapping them into a spread would be wrong.
 REV_HINTS = ("revenue", "sales")
+STARTS = ("revenue", "revenues", "salesrevenue", "totalrevenue", "oilandgasrevenue",
+          "oilandgassalesrevenue", "contractsrevenue", "healthcareorganizationrevenue",
+          "electricutilityrevenue", "regulatedoperatingrevenue",
+          "regulatedandunregulatedoperatingrevenue", "unregulatedoperatingrevenue",
+          "interestanddividendincome", "interestandfeeincome")
+CONTAINS_OK = ("operatingrevenue", "salesrevenuenet", "salesrevenuegoods",
+               "salesrevenueservices", "revenuefromcontract", "revenuefromsale",
+               "revenuefromrendering", "revenuesnetofinterestexpense",
+               "revenuesincludingintersegment", "realestaterevenue")
 EXCLUDE = ("deferred", "unbilled", "contractwithcustomerliability", "remaining",
            "disaggregat", "costof", "expenserelated", "receivable", "percentage",
            "unearned", "backlog", "incometax", "taxexpense", "proforma",
            "proceedsfrom", "gainloss", "gainslosses", "impairment", "salesandmarketing",
-           "taxeffect", "adjustment", "allowance")
+           "taxeffect", "adjustment", "allowance", "availableforsale", "paymentsto",
+           "salesandtransfers", "netincreasedecrease", "decreasedueto", "grossunrealized",
+           "grossrealized", "baddebts", "lessprovision", "resultsofoperations",
+           "mineralsinplace", "discontinuedoperation")
 
 POPULATION = """
 SELECT s.cik, s.company_name, s.sic, s.fy, s.period_end,
@@ -69,7 +87,9 @@ def revenue_concepts(facts: dict, period_end: datetime.date):
     for taxonomy in ("us-gaap", "ifrs-full"):
         for concept, body in facts.get("facts", {}).get(taxonomy, {}).items():
             low = concept.lower()
-            if not any(h in low for h in REV_HINTS) or any(x in low for x in EXCLUDE):
+            if any(x in low for x in EXCLUDE):
+                continue
+            if not (low.startswith(STARTS) or any(c in low for c in CONTAINS_OK)):
                 continue
             for unit, entries in body.get("units", {}).items():
                 if not (unit.startswith("USD") or unit in ("EUR", "JPY", "GBP", "CHF")):
