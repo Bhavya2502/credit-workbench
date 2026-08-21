@@ -1,0 +1,21 @@
+name: export-panel
+# Non-financial operating-company panel, one row per company-fiscal-year, as CSV.
+on:
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MOTHERDUCK_TOKEN: ${{ secrets.MOTHERDUCK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run python -m credit_workbench.warehouse.export_panel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nonfinancial-panel
+          path: export/
+          retention-days: 14
