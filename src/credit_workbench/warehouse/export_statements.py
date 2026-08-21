@@ -335,8 +335,9 @@ def main() -> None:
     xlsx = OUT / "credit_workbench_statements.xlsx"
     print(f"\nwrote {xlsx}  {xlsx.stat().st_size / 1e6:.1f} MB")
 
-    # Long form for anyone who would rather pivot it themselves.
-    csv = OUT / "statements_long.csv"
+    # Long form for anyone who would rather pivot it themselves. Gzipped: the plain
+    # CSV is 971 MB of mostly repeated company and label text.
+    csv = OUT / "statements_long.csv.gz"
     con.execute(f"""
         COPY (SELECT c.cik, c.company_name, c.sic, c.industry,
                      t.statement, t.line_no, t.line_code, t.line_item, l.fy, l.value
@@ -344,7 +345,7 @@ def main() -> None:
               JOIN template t ON t.line_code = l.line_code
               JOIN co c ON c.cik = l.cik
               ORDER BY c.company_name, t.statement, t.line_no, l.fy)
-        TO '{csv.as_posix()}' (HEADER, DELIMITER ',')""")
+        TO '{csv.as_posix()}' (HEADER, DELIMITER ',', COMPRESSION GZIP)""")
     print(f"wrote {csv}  {csv.stat().st_size / 1e6:.1f} MB")
 
 
