@@ -30,9 +30,14 @@ import httpx
 from credit_workbench.common.config import motherduck_token, sec_user_agent
 
 REV_HINTS = ("revenue", "sales", "operatingrevenue", "revenues")
+# "tax" was in this list on the first run and it silently excluded
+# RevenueFromContractWithCustomerExcludingAssessedTax - the single most common modern
+# revenue tag. The filter reported "SEC has none either" for companies whose revenue was
+# sitting right there. Exclusions are now specific rather than substring-greedy.
 EXCLUDE = ("deferred", "unbilled", "contractwithcustomerliability", "remaining",
-           "disaggregat", "costof", "expense", "receivable", "tax", "percentage",
-           "unearned", "backlog")
+           "disaggregat", "costof", "expenserelated", "receivable", "percentage",
+           "unearned", "backlog", "incometax", "taxexpense", "proforma",
+           "proceedsfrom", "gainloss", "gainslosses", "impairment")
 
 SAMPLE = """
 SELECT s.cik, s.company_name, s.sic, s.fy, s.period_end,
@@ -81,7 +86,7 @@ def _d(s: str):
 def main() -> None:
     con = duckdb.connect(f"md:credit_workbench?motherduck_token={motherduck_token()}")
     rows = (con.execute(SAMPLE.format(filter="s.operating_income IS NOT NULL", n=8)).fetchall()
-            + con.execute(SAMPLE.format(filter="s.operating_income IS NULL", n=7)).fetchall())
+            + con.execute(SAMPLE.format(filter="s.operating_income IS NULL", n=12)).fetchall())
     heads = [d[0] for d in con.description]
     print(f"sampled {len(rows)} non-financial FY2023 company-years with a null revenue\n")
 
